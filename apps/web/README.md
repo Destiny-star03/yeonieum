@@ -1,10 +1,9 @@
-# 연이음 웹 앱
+# 연이음 웹
 
-화면과 사용자 상호작용의 시작 디렉터리다. 현재 실행 가능한 앱은 없다. React·TypeScript는 기존 권장안이며 의존성·런타임·빌드 도구는 선택 후 이곳에 추가한다.
+React·TypeScript·Vite로 구현한 한국어 조직·권한 로컬 프로토타입이다. `src/features/access`에 실제 API와 연결된 로그인·대시보드·담당자 등록·역할 관리·감사 화면을 두고 `src/shared`에 API 계약을 둔다.
 
-- `src/features`: access, organizations, documents, budgets, handovers 등 실제 구현하는 기능별 UI·상태·API 호출.
-- `src/shared`: 여러 기능에서 실제 재사용하는 UI·기반 코드.
-- `public`: 공개 가능한 정적 자산. 내부 문서·영수증은 포함하지 않는다.
-- `tests`: 웹 통합 테스트. 단위 테스트는 기능 가까이에 둔다.
+저장소 루트에서 `npm ci --prefix apps/web`, `npm run dev --prefix apps/web`를 실행한다. API도 별도 실행해야 한다. Node 24, 패키지 의존성은 `package-lock.json`으로 고정한다. Vite는 127.0.0.1:5173에서 `/api`를 로컬 FastAPI로 프록시한다.
 
-첫 화면을 구현할 때 package.json과 lockfile, 린트·포맷·타입 검사·테스트 설정을 추가하고 검증한 실행 명령을 이 문서에 기록한다. 저장소 전체 규칙은 [기여 가이드](../../CONTRIBUTING.md), 기능 경계는 [구조 안내](../../docs/PROJECT_STRUCTURE.md)를 따른다.
+`npm run build --prefix apps/web`는 타입 검사와 번들 빌드, `npm run format:check --prefix apps/web`는 Prettier 검사, `npm run test:e2e --prefix apps/web`는 실제 브라우저 흐름 검사다. 자세한 설정은 [프로토타입 가이드](../../docs/PROTOTYPE.md)를 따른다.
+
+자료실·예산·인수인계 화면은 아직 없고 다음 구현 범위로 표시한다. 실행 자산에 학교 문서·영수증을 넣지 않는다. 쿠키 기반 세션은 로컬 시연용이며 운영 인증 검증과 구분한다.

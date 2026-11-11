@@ -1,11 +1,7 @@
-# 연이음 API 앱
+# 연이음 API
 
-업무 규칙과 서버 측 접근 제어의 시작 디렉터리다. 현재 실행 가능한 API는 없다. Python·FastAPI는 기존 권장안이며 설치하지 않았다.
+FastAPI와 SQLite를 사용하는 가상 데이터 전용 조직·권한 로컬 프로토타입이다. 인증·역할 HTTP 처리는 `src/yeonieum/modules/access`, 가상 시드는 `modules/organizations`, DB·감사는 `core`에 둔다. 요청마다 현재 역할·범위·기간을 검사하고 변경과 감사를 한 트랜잭션으로 저장한다.
 
-- `src/yeonieum/modules`: 실제 구현하는 기능의 HTTP 라우터·서비스·입출력·필요한 저장 모델.
-- `src/yeonieum/core`: 설정·로그·DB 연결 같은 기반 코드. 업무 규칙은 해당 모듈에 둔다.
-- `tests`: 기능별 단위·통합 테스트. 권한·기간·범위·금액·자료 보존을 수용 기준과 연결한다.
+앱 전용 Python 3.11 환경과 고정 의존성은 `requirements-lock.txt`, 검사 설정은 `pyproject.toml`이다. 실제 실행·시연·검사는 [프로토타입 가이드](../../docs/PROTOTYPE.md)를 따른다. 실행은 저장소 루트에서 해야 하며 `local-data`와 앱 가상환경은 Git에 포함하지 않는다.
 
-첫 API를 구현할 때 이 앱의 의존성 명세·lockfile·설정·마이그레이션·린트·포맷·테스트를 선택하고 검증한 명령을 여기에 기록한다. API를 선택한 프레임워크의 OpenAPI와 연결한다.
-
-[기여 가이드](../../CONTRIBUTING.md)와 [구조 안내](../../docs/PROJECT_STRUCTURE.md)를 따른다.
+운영 인증·개인정보 보존·계정 복구·자료·회계·인수인계·AWS 연결은 미구현이다. SQLite는 이 프로토타입의 임시 로컬 저장 선택이며 운영 PostgreSQL 전환 전 마이그레이션·동시성·복구를 별도 검증한다.
