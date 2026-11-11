@@ -22,3 +22,11 @@
 - Python은 snake_case, React 컴포넌트는 PascalCase, TypeScript 변수·함수는 camelCase 등 기여 가이드의 언어별 규칙을 따른다. 앱 의존성과 설정은 해당 앱에 둔다.
 - 문서와 실행·테스트·배포 경로를 코드 변경과 함께 갱신한다. 기능·권한 인터뷰의 최신 사용자 결정을 이전 0.x 초안보다 우선한다. 구조 적용 요청을 전체 기능 명세의 최종 승인이나 기술 스택 확정으로 해석하지 않는다.
 - Git 저장소에서 공통 검사는 `python -m pre_commit run --all-files --show-diff-on-failure`로 실행한다. 앱별 린트·포맷·타입 검사·테스트는 실제 도구를 추가할 때 CI에 연결한다. 실행하지 않은 앱 빌드·배포를 완료했다고 보고하지 않는다.
+
+
+## Git 협업
+
+- Git 작업 전에 `.agents/skills/yeonieum-git-workflow/SKILL.md`와 `docs/GIT_WORKFLOW.md`를 읽는다. 최신 develop에서 feature/bugfix를 만들고, main/develop에는 직접 커밋·푸시하지 않는다. hotfix는 main 기준으로 만들고 양쪽에 PR로 반영한다.
+- 브랜치는 소문자 `feature/기능명`, 커밋·PR 제목은 Conventional Commits와 72자 제한을 따른다. 기존 체크아웃을 재사용하고 미커밋 작업·원격 이력을 먼저 확인한다.
+- 로컬 검사·Git 정책 테스트를 통과한 작은 커밋을 명시한 작업 브랜치에 push한다. 사용자에게 이미 승인받은 push를 반복해서 묻지 않는다. main 병합·운영 배포는 별도 권한과 준비 조건을 따른다.
+- 서버 보호와 로컬 훅을 구분한다. `repository-checks`와 `git-policy` 결과를 확인한다. 기존 ci/repository-quality는 초기 이력이며 새 작업 브랜치 규칙을 바꾸는 예외로 확장하지 않는다.
