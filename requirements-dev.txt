@@ -1,0 +1,2 @@
+# Repository checks only; application dependencies belong to their app.
+pre-commit==4.7.0
