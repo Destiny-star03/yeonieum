@@ -2,6 +2,10 @@
 
 코드를 추가하기 전에 [구조 안내](docs/PROJECT_STRUCTURE.md), [프로젝트 지침](AGENTS.md), [기능명세](docs/FUNCTIONAL_SPEC.md)를 읽는다. 이 문서는 파일 배치와 협업 규칙을 정한다. 앱의 기술 스택·의존성은 아직 최종 선택 전이다.
 
+## Git 작업 규칙
+
+[Git 협업·배포 규칙](docs/GIT_WORKFLOW.md)을 따른다. 최신 develop에서 `feature/*` 또는 `bugfix/*`를 만들고 작은 Conventional Commit→push→PR→develop 검토·병합으로 진행한다. main은 검증된 develop·release·hotfix PR을 운영 책임자가 병합한다. GitHub Actions와 실제 서버 배포를 구분한다.
+
 ## 처음 시작하기
 
 현재는 문서와 시작 디렉터리, 공통 검사 설정만 있다. 웹·API 실행, 앱 빌드·테스트 명령은 실제 코드와 도구가 추가될 때 각 앱 README에 검증 후 기록한다.
@@ -15,7 +19,7 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m pre_commit run --all-files --show-diff-on-failure
 ```
 
-macOS/Linux에서는 `.venv/bin/python`으로 같은 명령을 실행한다. 훅 설치는 Git 저장소 안에서 수행한다. 현재 폴더에 Git 메타데이터나 원격 연결을 임의로 만들지 않는다. 첫 실행에는 검사 도구 다운로드가 필요하다.
+macOS/Linux에서는 `.venv/bin/python`으로 같은 명령을 실행한다. 훅 설치는 Git 저장소 안에서 수행하고 pre-commit·commit-msg가 함께 설치된다. 변경 후 `python -m unittest discover -s tests/unit -p "test_*.py" -v`로 Git 정책의 동작도 검사한다. 현재 폴더에 Git 메타데이터나 원격 연결을 임의로 만들지 않는다. 첫 실행에는 검사 도구 다운로드가 필요하다.
 
 ## 기능을 추가할 때
 
