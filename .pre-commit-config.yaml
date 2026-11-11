@@ -1,0 +1,29 @@
+minimum_pre_commit_version: '4.2.0'
+default_install_hook_types: [pre-commit, commit-msg]
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-yaml
+      - id: check-json
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-case-conflict
+      - id: detect-private-key
+      - id: check-added-large-files
+        args: ['--maxkb=5120']
+      - id: trailing-whitespace
+        args: ['--markdown-linebreak-ext=md']
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+        args: ['--fix=lf']
+      - id: no-commit-to-branch
+        args: ['--branch', main, '--branch', develop]
+        stages: [commit-msg]
+  - repo: local
+    hooks:
+      - id: conventional-commit
+        name: check Conventional Commit header
+        entry: python scripts/check_git_policy.py commit-msg
+        language: system
+        stages: [commit-msg]

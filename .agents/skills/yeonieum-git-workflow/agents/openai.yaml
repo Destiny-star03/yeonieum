@@ -1,0 +1,3 @@
+interface:
+  display_name: "Yeonieum Git Workflow"
+  short_description: "Use the Yeonieum develop and pull request workflow"
