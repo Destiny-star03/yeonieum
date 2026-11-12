@@ -175,7 +175,18 @@ export default function Portal() {
     return (
       <main className="login-page">
         <section className="login-story">
-          <div className="brand-mark">연</div>
+          <div className="school-lockup">
+            <img
+              src="/brand/university-symbol.png"
+              alt="연암공과대학교 로고"
+              width="44"
+              height="44"
+            />
+            <div>
+              <strong>연암공과대학교</strong>
+              <small>학생자치 운영 포털 · 연이음</small>
+            </div>
+          </div>
           <p className="eyebrow">YEONIEUM · STUDENT GOVERNANCE</p>
           <h1>
             담당자는 바뀌어도,
@@ -187,6 +198,19 @@ export default function Portal() {
             <br />
             자료와 업무를 연결하는 공동의 공간, 연이음.
           </p>
+          <figure className="mascot-card">
+            <img
+              src="/brand/cornbee.png"
+              alt="연암공과대학교 마스코트 커너비"
+              width="168"
+              height="168"
+            />
+            <figcaption>
+              <strong>커너비와 함께 이어가요.</strong>우리의 활동과 기록이
+              <br />
+              다음 담당자에게 닿도록.
+            </figcaption>
+          </figure>
           <div className="story-foot">
             총학생회 · 학과협의회 · 신문방송국 · 연합동아리
           </div>
@@ -289,7 +313,6 @@ export default function Portal() {
             setTab("overview");
           }}
         >
-          <span className="brand-mark">연</span>
           <span>
             연이음<small>학생자치 운영 포털</small>
           </span>
@@ -349,7 +372,13 @@ export default function Portal() {
       </aside>
       <div className="main-column">
         <header className="topbar">
-          <span>
+          <span className="school-identity">
+            <img
+              src="/brand/university-symbol.png"
+              alt=""
+              width="30"
+              height="30"
+            />
             연암공과대학교 <span className="divider">/</span> 학생자치기구
           </span>
           <span className="pill">가상 데이터 · 로컬 시연</span>
