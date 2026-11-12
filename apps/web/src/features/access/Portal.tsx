@@ -1,3 +1,4 @@
+import Brand from "../../shared/Brand";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   api,
@@ -175,18 +176,7 @@ export default function Portal() {
     return (
       <main className="login-page">
         <section className="login-story">
-          <div className="school-lockup">
-            <img
-              src="/brand/university-symbol.png"
-              alt="연암공과대학교 로고"
-              width="44"
-              height="44"
-            />
-            <div>
-              <strong>연암공과대학교</strong>
-              <small>학생자치 운영 포털 · 연이음</small>
-            </div>
-          </div>
+          <Brand />
           <p className="eyebrow">YEONIEUM · STUDENT GOVERNANCE</p>
           <h1>
             담당자는 바뀌어도,
@@ -313,9 +303,7 @@ export default function Portal() {
             setTab("overview");
           }}
         >
-          <span>
-            연이음<small>학생자치 운영 포털</small>
-          </span>
+          <Brand />
         </a>
         <div className="workspace-label">WORKSPACE</div>
         <nav aria-label="주 메뉴">
