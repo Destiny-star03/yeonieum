@@ -1,3 +1,4 @@
+import Dashboard from "../dashboard/Dashboard";
 import Brand from "../../shared/Brand";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
@@ -386,7 +387,7 @@ export default function Portal() {
               </p>
               <h1>
                 {tab === "overview"
-                  ? "함께 이어가는 학생자치"
+                  ? "대시보드"
                   : tab === "roles"
                     ? "조직과 담당자 관리"
                     : "업무의 흐름을 기록합니다"}
@@ -415,121 +416,11 @@ export default function Portal() {
             </div>
           )}
           {tab === "overview" && (
-            <>
-              <section className="welcome-card">
-                <div>
-                  <span className="pill light">연이음 첫 번째 연결</span>
-                  <h2>
-                    명확한 역할이
-                    <br />
-                    지속되는 운영의 시작입니다.
-                  </h2>
-                  <p>
-                    나의 학과와 협의회의 역할을 구분하고,
-                    <br />
-                    다음 담당자에게 안전하게 이어주세요.
-                  </p>
-                  <button
-                    className="white-button"
-                    onClick={() => setTab("roles")}
-                  >
-                    담당자 관리하기 ↗
-                  </button>
-                </div>
-                <div className="connection-art" aria-hidden="true">
-                  <div>학과협의회</div>
-                  <i></i>
-                  <div className="art-row">
-                    <span>학과</span>
-                    <span>학년</span>
-                    <span>반</span>
-                  </div>
-                  <small>ONE ACCOUNT, CONNECTED ROLES</small>
-                </div>
-              </section>
-              <section className="stats">
-                <article>
-                  <span>나의 유효 역할</span>
-                  <strong>
-                    {own.length}
-                    <small>개</small>
-                  </strong>
-                  <p>겸임 역할은 담당 범위별로 확인</p>
-                </article>
-                <article>
-                  <span>조회 가능한 담당자</span>
-                  <strong>
-                    {workspace.users.length}
-                    <small>명</small>
-                  </strong>
-                  <p>현재 허용된 소속 범위 기준</p>
-                </article>
-                <article>
-                  <span>현재 관리 상태</span>
-                  <strong className="status-text">
-                    {workspace.grant_options.length
-                      ? "역할 관리 가능"
-                      : "업무 범위 확인"}
-                  </strong>
-                  <p>서버에서 현재 자격과 기간을 판정</p>
-                </article>
-              </section>
-              <div className="two-columns">
-                <section className="panel">
-                  <div className="section-heading">
-                    <h2>내 담당 범위</h2>
-                    <span className="count">{own.length}</span>
-                  </div>
-                  {Boolean(user.is_admin) && (
-                    <div className="scope-card">
-                      <span className="role-tag">서비스 관리자</span>
-                      <h3>학생성공센터</h3>
-                      <p>최초 학회장 등록과 최고 책임자 서비스 권한 부여</p>
-                    </div>
-                  )}
-                  {own.map((a) => (
-                    <div className="scope-card" key={a.id}>
-                      <span className="role-tag">
-                        {workspace.roles[a.role]}
-                      </span>
-                      <h3>{path(a.unit_id)}</h3>
-                      <p>
-                        {date(a.starts_at)} — {date(a.ends_at)} · 종료 시각
-                        미포함
-                      </p>
-                      {a.role === "chair" && (
-                        <small>
-                          학회장들의 투표로 선출 · 자기 학과 학회장과 동일 임기
-                        </small>
-                      )}
-                    </div>
-                  ))}
-                  {!own.length && !user.is_admin && (
-                    <p className="empty">
-                      현재 유효한 업무 역할이 없습니다. 담당 책임자에게 역할
-                      등록을 요청해 주세요.
-                    </p>
-                  )}
-                </section>
-                <section className="panel">
-                  <h2>최고 책임자 연락처</h2>
-                  <p className="muted">
-                    일반 담당자의 전체 연락처는 공개하지 않습니다.
-                  </p>
-                  {workspace.contacts.map((c) => (
-                    <div className="contact-row" key={`${c.id}-${c.org_id}`}>
-                      <span className="avatar pale">{c.name.slice(0, 1)}</span>
-                      <div>
-                        <strong>{c.name}</strong>
-                        <small>{c.org_name}</small>
-                        <a href={`mailto:${c.email}`}>{c.email}</a>
-                        <small>{c.phone}</small>
-                      </div>
-                    </div>
-                  ))}
-                </section>
-              </div>
-            </>
+            <Dashboard
+              workspace={workspace}
+              user={user}
+              onManage={() => setTab("roles")}
+            />
           )}
           {tab === "roles" && (
             <>

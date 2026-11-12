@@ -4,7 +4,5 @@ export async function login(page: Page, identifier: string) {
   await page.goto("/");
   await page.getByLabel("시연 계정").selectOption(identifier);
   await page.getByRole("button", { name: "업무 공간으로 들어가기 →" }).click();
-  await expect(
-    page.getByRole("heading", { name: "함께 이어가는 학생자치" }),
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "대시보드" })).toBeVisible();
 }

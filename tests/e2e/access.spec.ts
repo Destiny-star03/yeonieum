@@ -82,9 +82,7 @@ test("선생님의 신규 담당자 등록과 직접 계정 로그인", async ({
   await page.getByRole("button", { name: "등록한 계정 직접 입력" }).click();
   await page.getByLabel("시연 계정").fill("browser-new");
   await page.getByRole("button", { name: "업무 공간으로 들어가기 →" }).click();
-  await expect(
-    page.getByRole("heading", { name: "함께 이어가는 학생자치" }),
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "대시보드" })).toBeVisible();
   await expect(
     page.getByText("현재 유효한 업무 역할이 없습니다."),
   ).toContainText("현재 유효한 업무 역할이 없습니다.");
