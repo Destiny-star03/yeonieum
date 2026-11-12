@@ -1,13 +1,10 @@
+import {
+  formatDate as shortDate,
+  lastIncludedInstant,
+} from "../../shared/tenure";
 import type { Assignment, Person, Workspace } from "../../shared/api";
 
 type Props = { workspace: Workspace; user: Person; onManage: () => void };
-const shortDate = (value: string) =>
-  new Intl.DateTimeFormat("ko-KR", {
-    timeZone: "Asia/Seoul",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(new Date(value));
 function monthKey(value: string) {
   const parts = new Intl.DateTimeFormat("en", {
     timeZone: "Asia/Seoul",
@@ -37,7 +34,10 @@ function ScheduleChart({ rows, time }: { rows: Assignment[]; time: string }) {
         monthKey(row.starts_at) === item.key
       )
         item.starts++;
-      if (Date.parse(row.ends_at) > now && monthKey(row.ends_at) === item.key)
+      if (
+        Date.parse(row.ends_at) > now &&
+        monthKey(lastIncludedInstant(row.ends_at)) === item.key
+      )
         item.ends++;
     }
   }
@@ -305,10 +305,10 @@ export default function Dashboard({ workspace, user, onManage }: Props) {
                 {own.map((a) => (
                   <tr key={a.id}>
                     <td>
-                      <strong>{workspace.roles[a.role]}</strong>
+                      <strong>{a.role_label || workspace.roles[a.role]}</strong>
                     </td>
                     <td>{unitPath(a.unit_id)}</td>
-                    <td>{shortDate(a.ends_at)}</td>
+                    <td>{shortDate(lastIncludedInstant(a.ends_at))}</td>
                   </tr>
                 ))}
               </tbody>

@@ -5,12 +5,17 @@ from datetime import datetime, timezone
 from pwdlib import PasswordHash
 
 from yeonieum.core.database import stamp, transaction
+from yeonieum.modules.access.catalog import seed_roles
 
 DEMO_PASSWORD = "Yeonieum-demo-2026!"
 
 
 def seed(conn):
+    conn.execute(
+        "INSERT OR IGNORE INTO units (id,org_id,parent_id,kind,name) VALUES ('monitoring','monitoring',NULL,'organization','모니터링단')"
+    )
     if conn.execute("SELECT count(*) FROM users").fetchone()[0]:
+        seed_roles(conn)
         return
     hashed = PasswordHash.recommended().hash(DEMO_PASSWORD)
     year = datetime.now(timezone.utc).year
@@ -23,23 +28,28 @@ def seed(conn):
             ("press", "신문방송국"),
             ("clubs", "연합동아리"),
         ]:
-            conn.execute("INSERT INTO units VALUES (?,?,?,?,?)", (ident, ident, None, "organization", name))
+            conn.execute(
+                "INSERT INTO units (id,org_id,parent_id,kind,name) VALUES (?,?,?,?,?)",
+                (ident, ident, None, "organization", name),
+            )
         for dept, name in [("software", "스마트소프트웨어학과"), ("mechanical", "기계공학과")]:
             conn.execute(
-                "INSERT INTO units VALUES (?,?,?,?,?)", (dept, "council", "council", "department", name)
+                "INSERT INTO units (id,org_id,parent_id,kind,name) VALUES (?,?,?,?,?)",
+                (dept, "council", "council", "department", name),
             )
             for level in ["1", "2"]:
                 group = f"{dept}-{level}"
                 conn.execute(
-                    "INSERT INTO units VALUES (?,?,?,?,?)", (group, "council", dept, "year", f"{level}학년")
+                    "INSERT INTO units (id,org_id,parent_id,kind,name) VALUES (?,?,?,?,?)",
+                    (group, "council", dept, "year", f"{level}학년"),
                 )
                 for section in ["A", "B"]:
                     conn.execute(
-                        "INSERT INTO units VALUES (?,?,?,?,?)",
+                        "INSERT INTO units (id,org_id,parent_id,kind,name) VALUES (?,?,?,?,?)",
                         (f"{group}-{section}", "council", group, "class", f"{section}반"),
                     )
         conn.execute(
-            "INSERT INTO units VALUES (?,?,?,?,?)",
+            "INSERT INTO units (id,org_id,parent_id,kind,name) VALUES (?,?,?,?,?)",
             ("student-office", "student", "student", "office", "기획부"),
         )
         people = [
@@ -54,7 +64,7 @@ def seed(conn):
         ]
         for ident, name, number, admin, home in people:
             conn.execute(
-                "INSERT INTO users VALUES (?,?,?,?,?,?,?,1)",
+                "INSERT INTO users (id,name,email,identifier,phone,password_hash,is_admin,active) VALUES (?,?,?,?,?,?,?,1)",
                 (ident, name, f"{ident}@demo.invalid", number, "010-0000-0000", hashed, admin),
             )
             if home:
@@ -84,3 +94,5 @@ def seed(conn):
                     "가상 선출 결과" if parent else "",
                 ),
             )
+
+    seed_roles(conn)

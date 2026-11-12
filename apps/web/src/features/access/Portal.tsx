@@ -1,3 +1,17 @@
+import AcademicGroups from "./AcademicGroups";
+import AcademicChairControls from "./AcademicChairControls";
+import ChairDesignationDialog from "./ChairDesignationDialog";
+import {
+  formatDate as date,
+  seoulYear,
+  inclusiveEndInstant,
+  lastIncludedInstant,
+} from "../../shared/tenure";
+import StructureManagement from "./StructureManagement";
+import InvitationOutbox from "./InvitationOutbox";
+import OrganizationManagement from "../organizations/OrganizationManagement";
+import RemovePersonDialog from "./RemovePersonDialog";
+import { formatPhone } from "./phone";
 import Dashboard from "../dashboard/Dashboard";
 import Brand from "../../shared/Brand";
 import { useEffect, useRef, useState, type FormEvent } from "react";
@@ -22,8 +36,18 @@ const labels: Record<string, string> = {
   "role.revoked": "역할 회수",
   "role.dependency-ended": "연결 자격 종료",
   "user.registered": "담당자 등록",
+  "user.removed": "담당자 제거",
+  "user.restored": "담당자 복구",
+  "invitation.accepted": "초대 인증 완료(로컬)",
+  "invitation.reissued": "초대 재발급(로컬)",
+  "organization.created": "단체 추가",
+  "organization.removed": "단체 삭제",
+  "organization.restored": "단체 복원",
+  "unit.created": "하위 조직 등록",
+  "role_type.created": "역할 종류 추가",
+  "role_type.removed": "역할 종류 삭제",
+  "role_type.restored": "역할 종류 복원",
 };
-const date = (value: string) => new Date(value).toLocaleDateString("ko-KR");
 export default function Portal() {
   const [direct, setDirect] = useState(false);
   const [user, setUser] = useState<Person | null>(null),
@@ -34,11 +58,47 @@ export default function Portal() {
   const [tab, setTab] = useState("overview"),
     [search, setSearch] = useState(""),
     [role, setRole] = useState("");
+  const [scopeId, setScopeId] = useState("");
+  const [grantOrgId, setGrantOrgId] = useState("");
   const [history, setHistory] = useState<Audit[]>([]),
     [busy, setBusy] = useState(false),
     [revokeRow, setRevokeRow] = useState<Assignment | null>(null);
+  const [removePerson, setRemovePerson] = useState<Person | null>(null);
+  const [chairCandidate, setChairCandidate] = useState<Assignment | null>(null);
+  const [recipientId, setRecipientId] = useState("");
+  const [grantFeedback, setGrantFeedback] = useState<{
+    message: string;
+    error: boolean;
+  } | null>(null);
   const registration = useRef<HTMLDialogElement>(null),
     revocation = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    if (!workspace) return;
+    if (
+      scopeId &&
+      !workspace.grant_options.some((o) => o.unit_id === scopeId)
+    ) {
+      setScopeId("");
+      setRole("");
+      setRecipientId("");
+    } else if (
+      role &&
+      !workspace.grant_options.some(
+        (o) => o.unit_id === scopeId && o.role === role,
+      )
+    ) {
+      setRole("");
+      setRecipientId("");
+    }
+    if (
+      grantOrgId &&
+      !workspace.units.some((u) => u.id === grantOrgId && u.active)
+    ) {
+      setGrantOrgId("");
+      setScopeId("");
+      setRole("");
+    }
+  }, [workspace, scopeId, role, grantOrgId]);
   async function refresh() {
     setWorkspace(await api<Workspace>("/workspace"));
   }
@@ -65,19 +125,28 @@ export default function Portal() {
     return item
       ? item.parent_id
         ? `${path(item.parent_id)} / ${item.name}`
-        : item.name
+        : item.active
+          ? item.name
+          : `${item.name} (삭제됨)`
       : id;
   }
-  async function perform(action: () => Promise<unknown>, success: string) {
+  async function perform(
+    action: () => Promise<unknown>,
+    success: string | (() => string),
+    feedback?: (message: string, error: boolean) => void,
+  ) {
     setBusy(true);
     setError("");
     setNotice("");
     try {
       await action();
       await refresh();
-      setNotice(success);
+      const message = typeof success === "function" ? success() : success;
+      if (feedback) feedback(message, false);
+      else setNotice(message);
     } catch (e) {
-      setError((e as Error).message);
+      if (feedback) feedback((e as Error).message, true);
+      else setError((e as Error).message);
     } finally {
       setBusy(false);
     }
@@ -126,6 +195,7 @@ export default function Portal() {
     e.preventDefault();
     const form = e.currentTarget;
     const data = new FormData(form);
+    setGrantFeedback(null);
     const parent = workspace?.assignments.find(
       (a) => a.id === data.get("prerequisite_id"),
     );
@@ -144,21 +214,38 @@ export default function Portal() {
           ends_at:
             role === "chair"
               ? parent?.ends_at
-              : new Date(`${data.get("ends_at")}T00:00:00+09:00`).toISOString(),
+              : inclusiveEndInstant(String(data.get("ends_at"))),
           prerequisite_id:
             role === "chair" ? data.get("prerequisite_id") : null,
           election_note: role === "chair" ? data.get("election_note") : "",
         }),
       "역할을 등록했습니다. 기간과 담당 범위를 확인해 주세요.",
+      (message, error) => setGrantFeedback({ message, error }),
     );
   }
   async function register(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    const data = Object.fromEntries(new FormData(e.currentTarget));
-    await perform(async () => {
-      await api("/users", data);
-      registration.current?.close();
-    }, "가상 담당자를 등록했습니다. 다음으로 역할을 부여해 주세요.");
+    const fields = new FormData(e.currentTarget);
+    const data = {
+      ...Object.fromEntries(fields),
+      unit_ids: fields.getAll("unit_ids"),
+    };
+    if (!data.unit_ids.length) {
+      setError("소속을 한 개 이상 선택해 주세요.");
+      return;
+    }
+    let restored = false;
+    await perform(
+      async () => {
+        const result = await api<{ restored: boolean }>("/users", data);
+        restored = result.restored;
+        registration.current?.close();
+      },
+      () =>
+        restored
+          ? "삭제했던 담당자 계정을 복구했습니다. 로컬 수신함에서 새 초대 인증을 완료해 주세요. 이전 역할은 복구되지 않습니다."
+          : "가상 담당자를 등록했습니다. 로컬 수신함에서 초대 인증을 완료한 뒤 로그인할 수 있습니다.",
+    );
   }
   async function revoke(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -203,7 +290,7 @@ export default function Portal() {
             </figcaption>
           </figure>
           <div className="story-foot">
-            총학생회 · 학과협의회 · 신문방송국 · 연합동아리
+            총학생회 · 학과협의회 · 신문방송국 · 연합동아리 · 모니터링단
           </div>
         </section>
         <section className="login-panel">
@@ -282,14 +369,34 @@ export default function Portal() {
     (a) => a.user_id === user.id && a.effective,
   );
   const people = workspace.users.filter((p) => p.name.includes(search));
-  const roleNames = [...new Set(workspace.grant_options.map((x) => x.role))];
-  const roleUnits = workspace.units.filter((u) =>
-    workspace.grant_options.some((o) => o.unit_id === u.id && o.role === role),
+  const roleUnits = workspace.units.filter(
+    (u) =>
+      Boolean(u.active) &&
+      workspace.grant_options.some((o) => o.unit_id === u.id),
+  );
+  const grantOrganizations = workspace.units.filter(
+    (u) =>
+      u.kind === "organization" &&
+      u.active &&
+      roleUnits.some((t) => t.org_id === u.id),
+  );
+  const roleOptions = workspace.grant_options.filter(
+    (o) => o.unit_id === scopeId,
   );
   const registerUnits = workspace.units.filter((u) =>
-    workspace.grant_options.some((o) => o.unit_id === u.id),
+    user.is_admin
+      ? u.kind === "organization" && Boolean(u.active)
+      : workspace.grant_options.some((o) => o.unit_id === u.id),
   );
-  const nowYear = new Date(workspace.server_time).getFullYear();
+  const nowYear = seoulYear(workspace.server_time);
+  const listedAssignments = workspace.assignments.filter(
+    (a) =>
+      !a.revoked_at &&
+      (a.role !== "chair" ||
+        !workspace.assignments.some(
+          (parent) => parent.id === a.prerequisite_id && !parent.revoked_at,
+        )),
+  );
   const canAudit = Boolean(
     user.is_admin || own.some((a) => ["head", "chair"].includes(a.role)),
   );
@@ -350,8 +457,9 @@ export default function Portal() {
             <small>
               {user.is_admin
                 ? "학생성공센터 · 관리자"
-                : own.map((a) => workspace.roles[a.role]).join(" · ") ||
-                  "역할 미부여"}
+                : own
+                    .map((a) => a.role_label || workspace.roles[a.role])
+                    .join(" · ") || "역할 미부여"}
             </small>
           </div>
           <button onClick={logout} aria-label="로그아웃">
@@ -424,6 +532,19 @@ export default function Portal() {
           )}
           {tab === "roles" && (
             <>
+              {Boolean(user.is_admin) && (
+                <OrganizationManagement
+                  units={workspace.units}
+                  onChanged={refresh}
+                />
+              )}
+              {(Boolean(user.is_admin) ||
+                workspace.unit_creation_options.length > 0) && (
+                <StructureManagement
+                  workspace={workspace}
+                  onChanged={refresh}
+                />
+              )}
               <div className="panel">
                 <div className="section-heading">
                   <div>
@@ -457,6 +578,7 @@ export default function Portal() {
                         <th>담당자</th>
                         <th>소속</th>
                         <th>담당 정보</th>
+                        {Boolean(user.is_admin) && <th>관리</th>}
                       </tr>
                     </thead>
                     <tbody>
@@ -466,14 +588,19 @@ export default function Portal() {
                             <strong>{p.name}</strong>
                           </td>
                           <td>
-                            {p.unit_ids?.map((id) => (
-                              <div key={id}>{path(id)}</div>
-                            )) || "학생성공센터"}
+                            {p.unit_ids?.length
+                              ? p.unit_ids.map((id) => (
+                                  <div key={id}>{path(id)}</div>
+                                ))
+                              : "학생성공센터"}
                           </td>
                           <td>
                             {p.identifier ? (
                               <>
                                 <div>{p.identifier}</div>
+                                {p.email_verified === 0 && (
+                                  <small>초대 인증 대기(로컬)</small>
+                                )}
                                 <small>
                                   {p.email} · {p.phone}
                                 </small>
@@ -482,6 +609,19 @@ export default function Portal() {
                               <span className="muted">열람 범위 제한</span>
                             )}
                           </td>
+                          {Boolean(user.is_admin) && (
+                            <td>
+                              {!p.is_admin && (
+                                <button
+                                  className="text-button"
+                                  onClick={() => setRemovePerson(p)}
+                                  aria-label={`${p.name} 제거`}
+                                >
+                                  제거
+                                </button>
+                              )}
+                            </td>
+                          )}
                         </tr>
                       ))}
                     </tbody>
@@ -491,34 +631,54 @@ export default function Portal() {
                   )}
                 </div>
               </div>
+              <AcademicGroups groups={workspace.sharing_groups} />
+              {registerUnits.length > 0 && (
+                <InvitationOutbox workspace={workspace} onChanged={refresh} />
+              )}
               <div className="two-columns roles-layout">
                 <section className="panel">
                   <h2>역할과 임기</h2>
+                  <p className="muted">
+                    계정별 업무 권한·담당 범위·유효기간을 관리합니다. 역할
+                    회수는 계정을 제거하지 않습니다. 회수된 역할은 이 목록에서
+                    숨기며 활동 이력은 보존합니다.
+                  </p>
                   <div className="assignment-list">
-                    {workspace.assignments.map((a) => (
+                    {listedAssignments.map((a) => (
                       <article key={a.id} className="assignment">
                         <div>
                           <span
                             className={`state ${a.effective ? "live" : ""}`}
                           >
-                            {a.revoked_at
-                              ? "회수"
-                              : a.effective
-                                ? "유효"
-                                : new Date(a.starts_at) >
-                                    new Date(workspace.server_time)
-                                  ? "시작 대기"
-                                  : "비활성"}
+                            {a.effective
+                              ? "유효"
+                              : new Date(a.starts_at) >
+                                  new Date(workspace.server_time)
+                                ? "시작 대기"
+                                : "비활성"}
                           </span>
                           <h3>
                             {workspace.users.find((p) => p.id === a.user_id)
                               ?.name || "이전 담당자"}{" "}
-                            <small>{workspace.roles[a.role]}</small>
+                            <small>
+                              {a.role_label || workspace.roles[a.role]}
+                            </small>
                           </h3>
                           <p>{path(a.unit_id)}</p>
                           <small>
-                            {date(a.starts_at)} — {date(a.ends_at)}
+                            {date(a.starts_at)} —{" "}
+                            {date(lastIncludedInstant(a.ends_at))}
                           </small>
+                          <AcademicChairControls
+                            assignment={a}
+                            workspace={workspace}
+                            admin={Boolean(user.is_admin)}
+                            onAppoint={setChairCandidate}
+                            onRevoke={(row) => {
+                              setRevokeRow(row);
+                              revocation.current?.showModal();
+                            }}
+                          />
                         </div>
                         {!a.revoked_at &&
                           a.user_id !== user.id &&
@@ -540,47 +700,47 @@ export default function Portal() {
                       </article>
                     ))}
                   </div>
-                  {!workspace.assignments.length && (
+                  {!listedAssignments.length && (
                     <p className="empty">조회 가능한 역할이 없습니다.</p>
                   )}
                 </section>
                 <section className="panel grant-panel">
                   <h2>역할 부여</h2>
                   <p className="muted">
-                    본인이나 상위 책임자의 권한을 스스로 높일 수 없습니다.
+                    단체와 담당 범위를 먼저 선택하면 부여할 수 있는 역할이
+                    표시됩니다. 본인의 권한은 변경할 수 없습니다.
                   </p>
-                  {roleNames.length ? (
-                    <form onSubmit={grant}>
+                  {roleUnits.length ? (
+                    <form
+                      onSubmit={grant}
+                      onInvalid={() =>
+                        setGrantFeedback({
+                          message:
+                            "담당자·역할·담당 범위·임기 등 필수 입력을 확인해 주세요.",
+                          error: true,
+                        })
+                      }
+                    >
                       <label>
-                        대상 담당자
-                        <select name="user_id" required defaultValue="">
-                          <option value="" disabled>
-                            담당자 선택
-                          </option>
-                          {workspace.users
-                            .filter((p) => p.id !== user.id && !p.is_admin)
-                            .map((p) => (
-                              <option value={p.id} key={p.id}>
-                                {p.name}
-                              </option>
-                            ))}
-                        </select>
-                      </label>
-                      <label>
-                        역할
+                        단체
                         <select
-                          aria-label="역할"
-                          name="role"
+                          aria-label="단체"
+                          value={grantOrgId}
                           required
-                          value={role}
-                          onChange={(e) => setRole(e.target.value)}
+                          onChange={(e) => {
+                            setGrantOrgId(e.target.value);
+                            setScopeId("");
+                            setRole("");
+                            setRecipientId("");
+                            setGrantFeedback(null);
+                          }}
                         >
                           <option value="" disabled>
-                            역할 선택
+                            단체 선택
                           </option>
-                          {roleNames.map((r) => (
-                            <option key={r} value={r}>
-                              {workspace.roles[r]}
+                          {grantOrganizations.map((u) => (
+                            <option key={u.id} value={u.id}>
+                              {u.name}
                             </option>
                           ))}
                         </select>
@@ -590,18 +750,73 @@ export default function Portal() {
                         <select
                           aria-label="담당 범위"
                           name="unit_id"
+                          value={scopeId}
                           required
-                          key={role}
-                          defaultValue=""
+                          disabled={!grantOrgId}
+                          onChange={(e) => {
+                            setScopeId(e.target.value);
+                            setRole("");
+                            setRecipientId("");
+                            setGrantFeedback(null);
+                          }}
                         >
                           <option value="" disabled>
-                            소속 범위 선택
+                            단체 전체 또는 하위 조직 선택
                           </option>
-                          {roleUnits.map((u) => (
-                            <option key={u.id} value={u.id}>
-                              {path(u.id)}
+                          {roleUnits
+                            .filter((u) => u.org_id === grantOrgId)
+                            .map((u) => (
+                              <option key={u.id} value={u.id}>
+                                {path(u.id)}
+                              </option>
+                            ))}
+                        </select>
+                      </label>
+                      <label>
+                        역할
+                        <select
+                          aria-label="역할"
+                          name="role"
+                          value={role}
+                          required
+                          disabled={!scopeId}
+                          onChange={(e) => {
+                            setRole(e.target.value);
+                            setGrantFeedback(null);
+                          }}
+                        >
+                          <option value="" disabled>
+                            범위에 맞는 역할 선택
+                          </option>
+                          {roleOptions.map((o) => (
+                            <option key={o.role} value={o.role}>
+                              {o.label}
                             </option>
                           ))}
+                        </select>
+                      </label>
+                      <label>
+                        대상 담당자
+                        <select
+                          name="user_id"
+                          required
+                          value={recipientId}
+                          disabled={!role}
+                          onChange={(e) => {
+                            setRecipientId(e.target.value);
+                            setGrantFeedback(null);
+                          }}
+                        >
+                          <option value="" disabled>
+                            담당자 선택
+                          </option>
+                          {workspace.users
+                            .filter((p) => p.id !== user.id && !p.is_admin)
+                            .map((p) => (
+                              <option key={p.id} value={p.id}>
+                                {p.name}
+                              </option>
+                            ))}
                         </select>
                       </label>
                       {role === "chair" ? (
@@ -610,6 +825,7 @@ export default function Portal() {
                             선출자의 학회장 자격
                             <select
                               name="prerequisite_id"
+                              key={recipientId}
                               required
                               defaultValue=""
                             >
@@ -619,7 +835,9 @@ export default function Portal() {
                               {workspace.assignments
                                 .filter(
                                   (a) =>
-                                    a.role === "department_head" && a.effective,
+                                    a.role === "department_head" &&
+                                    a.effective &&
+                                    a.user_id === recipientId,
                                 )
                                 .map((a) => (
                                   <option value={a.id} key={a.id}>
@@ -629,7 +847,7 @@ export default function Portal() {
                                       )?.name
                                     }{" "}
                                     · {path(a.unit_id)} ({date(a.starts_at)} —{" "}
-                                    {date(a.ends_at)})
+                                    {date(lastIncludedInstant(a.ends_at))})
                                   </option>
                                 ))}
                             </select>
@@ -660,15 +878,23 @@ export default function Portal() {
                             />
                           </label>
                           <label>
-                            임기 종료 (미포함)
+                            임기 종료 (당일 포함)
                             <input
                               name="ends_at"
                               type="date"
                               required
-                              defaultValue={`${nowYear + 1}-01-01`}
+                              defaultValue={`${nowYear}-12-31`}
                             />
                           </label>
                         </div>
+                      )}
+                      {grantFeedback && (
+                        <p
+                          role={grantFeedback.error ? "alert" : "status"}
+                          className={grantFeedback.error ? "error" : "success"}
+                        >
+                          {grantFeedback.message}
+                        </p>
                       )}
                       <button className="primary" disabled={busy}>
                         {busy ? "저장 중…" : "역할 부여하기"}
@@ -717,6 +943,21 @@ export default function Portal() {
           </footer>
         </main>
       </div>
+      <ChairDesignationDialog
+        head={chairCandidate}
+        workspace={workspace}
+        onClose={() => setChairCandidate(null)}
+        onChanged={refresh}
+        onComplete={() => {
+          setChairCandidate(null);
+          setNotice("선출된 학회장에게 의장 표시를 연결했습니다.");
+        }}
+      />
+      <RemovePersonDialog
+        person={removePerson}
+        onClose={() => setRemovePerson(null)}
+        onChanged={refresh}
+      />
       <dialog ref={registration}>
         <form onSubmit={register}>
           {error && (
@@ -747,32 +988,70 @@ export default function Portal() {
           </label>
           <label>
             가상 학번
-            <input name="identifier" required minLength={3} maxLength={30} />
+            <input
+              name="identifier"
+              required
+              minLength={8}
+              maxLength={8}
+              pattern="[0-9]{8}"
+              inputMode="numeric"
+              title="학번은 숫자 8자리로 입력해 주세요."
+            />
+            <small className="muted">
+              숫자 8자리 · 실제 학적 여부는 학교 연동 전까지 확인하지 않습니다.
+            </small>
           </label>
           <label>
             가상 전화번호
-            <input name="phone" required defaultValue="010-0000-0000" />
+            <input
+              name="phone"
+              type="tel"
+              inputMode="numeric"
+              required
+              placeholder="010-0000-0000"
+              maxLength={13}
+              onChange={(e) => {
+                e.target.value = formatPhone(e.target.value);
+              }}
+            />
           </label>
-          <label>
-            소속
-            <select aria-label="소속" name="unit_id" required>
-              {registerUnits.map((u) => (
-                <option value={u.id} key={u.id}>
-                  {path(u.id)}
-                </option>
-              ))}
-            </select>
-          </label>
+          <fieldset className="membership-options">
+            <legend>소속 (여러 개 선택 가능)</legend>
+            {registerUnits.map((u) => (
+              <label key={u.id}>
+                <input type="checkbox" name="unit_ids" value={u.id} />
+                {path(u.id)}
+              </label>
+            ))}
+            <small className="muted">
+              한 개 이상 선택해 주세요. 소속을 추가해도 업무 권한은 자동
+              부여되지 않습니다.
+            </small>
+          </fieldset>
+          {Boolean(user.is_admin) && (
+            <p className="form-note">
+              단체만 선택해 등록한 뒤, 역할 부여에서 필요한 학과·학년·반 범위를
+              지정합니다.
+            </p>
+          )}
           <label>
             시연 비밀번호
             <input
               name="password"
               type="password"
               required
-              minLength={12}
+              minLength={8}
+              maxLength={128}
+              pattern={String.raw`(?=.*[0-9])(?=.*[\p{P}\p{S}]).{8,128}`}
+              title="8자 이상이며 숫자와 특수문자를 포함해야 합니다."
               defaultValue="Yeonieum-demo-2026!"
             />
           </label>
+          <p className="form-note">
+            비밀번호는 8자 이상, 숫자·특수문자 포함입니다. 등록 시 로컬 초대
+            링크를 만들며 외부 이메일은 발송하지 않습니다. 삭제한 학번과
+            이메일이 모두 같으면 기존 계정을 복구합니다.
+          </p>
           <button className="primary" disabled={busy}>
             담당자 등록
           </button>

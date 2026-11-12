@@ -5,6 +5,7 @@ export type Unit = {
   kind: string;
   name: string;
   in_scope: boolean;
+  active: number;
 };
 export type Person = {
   id: string;
@@ -14,6 +15,7 @@ export type Person = {
   email?: string;
   phone?: string;
   is_admin?: number;
+  email_verified?: number;
 };
 export type Assignment = {
   id: string;
@@ -25,13 +27,42 @@ export type Assignment = {
   revoked_at: string | null;
   effective: boolean;
   prerequisite_id: string | null;
+  role_label: string;
+};
+export type RoleDefinition = {
+  id: string;
+  org_id: string;
+  code: string;
+  label: string;
+  scope_kind: string;
+  builtin: number;
+  active: number;
+};
+export type SharingGroup = {
+  key: string;
+  kind: "council_officers" | "department";
+  label: string;
+  unit_id: string;
+  members: {
+    user_id: string;
+    name: string;
+    roles: string[];
+    department_names: string[];
+    is_chair: boolean;
+  }[];
 };
 export type Workspace = {
   units: Unit[];
   users: Person[];
   assignments: Assignment[];
   contacts: (Person & { org_id: string; org_name: string })[];
-  grant_options: { unit_id: string; role: string }[];
+  grant_options: { unit_id: string; role: string; label: string }[];
+  role_definitions: RoleDefinition[];
+  can_manage_role_types: boolean;
+  unit_creation_options: { parent_id: string; org_id: string; kind: string }[];
+  sharing_groups: SharingGroup[];
+  scope_kinds: Record<string, string>;
+  role_scope_kinds: Record<string, string[]>;
   roles: Record<string, string>;
   server_time: string;
 };
@@ -57,7 +88,22 @@ export async function api<T>(path: string, body?: unknown): Promise<T> {
     throw new Error(
       typeof value.detail === "string"
         ? value.detail
-        : "입력 내용을 확인해 주세요.",
+        : Array.isArray(value.detail)
+          ? [
+              ...new Set(
+                value.detail.map(
+                  (e: { loc?: string[] }) =>
+                    ({
+                      identifier: "학번은 숫자 8자리여야 합니다.",
+                      password:
+                        "비밀번호는 8자 이상, 숫자·특수문자 포함이어야 합니다.",
+                      email: "이메일 주소 형식을 확인해 주세요.",
+                      unit_ids: "소속을 한 개 이상 선택해 주세요.",
+                    })[e.loc?.at(-1) || ""] || "입력 내용을 확인해 주세요.",
+                ),
+              ),
+            ].join(" ")
+          : "입력 내용을 확인해 주세요.",
     );
   return value as T;
 }

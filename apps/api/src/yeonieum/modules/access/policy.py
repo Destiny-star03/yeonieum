@@ -4,16 +4,7 @@ from datetime import datetime
 
 from fastapi import HTTPException
 
-ROLE_LABELS = {
-    "head": "최고 책임자",
-    "chair": "의장",
-    "department_head": "학회장",
-    "vice_department_head": "부학회장",
-    "class_rep": "반대표",
-    "manager": "부장",
-    "deputy": "차장",
-    "club_head": "일반동아리장",
-}
+from yeonieum.modules.access.catalog import definition, label_for
 
 
 def deny(message="담당 범위 또는 역할 권한이 없습니다."):
@@ -45,14 +36,23 @@ def effective(conn, row, now, seen=None):
     if row["id"] in seen:
         return False
     seen.add(row["id"])
+    target = unit(conn, row["unit_id"])
+    role_type = definition(conn, target["org_id"], row["role"])
+    if (
+        not target["active"]
+        or not unit(conn, target["org_id"])["active"]
+        or not role_type
+        or not role_type["active"]
+    ):
+        return False
     if row["revoked_at"] or not (
         datetime.fromisoformat(row["starts_at"]) <= now < datetime.fromisoformat(row["ends_at"])
     ):
         return False
     if datetime.fromisoformat(row["activated_at"]) > now:
         return False
-    owner = conn.execute("SELECT active FROM users WHERE id=?", (row["user_id"],)).fetchone()
-    if not owner or not owner["active"]:
+    owner = conn.execute("SELECT active,email_verified FROM users WHERE id=?", (row["user_id"],)).fetchone()
+    if not owner or not owner["active"] or not owner["email_verified"]:
         return False
     if row["role"] == "chair":
         parent = conn.execute("SELECT * FROM assignments WHERE id=?", (row["prerequisite_id"],)).fetchone()
@@ -78,7 +78,12 @@ def active_roles(conn, actor, now):
 
 def scope(conn, actor, now):
     if actor["is_admin"]:
-        return {r["id"] for r in conn.execute("SELECT id FROM units")}
+        return {
+            r["id"]
+            for r in conn.execute(
+                "SELECT u.id FROM units u JOIN units o ON o.id=u.org_id WHERE u.active=1 AND o.active=1"
+            )
+        }
     result = set()
     for row in active_roles(conn, actor, now):
         result.update(descendants(conn, row["unit_id"]))
@@ -86,43 +91,83 @@ def scope(conn, actor, now):
 
 
 def can_grant(conn, actor, target_unit, role, now):
+    role_type = definition(conn, target_unit["org_id"], role)
+    if (
+        not target_unit["active"]
+        or not unit(conn, target_unit["org_id"])["active"]
+        or not role_type
+        or not role_type["active"]
+        or target_unit["kind"] != role_type["scope_kind"]
+    ):
+        return False
     if actor["is_admin"]:
-        return role in {"head", "chair", "department_head"}
+        return True
     for row in active_roles(conn, actor, now):
         owned = unit(conn, row["unit_id"])
         if owned["org_id"] != target_unit["org_id"]:
             continue
+        if not role_type["builtin"]:
+            if row["role"] in {"head", "chair"}:
+                return True
+            if row["role"] == "department_head" and target_unit["id"] in descendants(conn, row["unit_id"]):
+                return True
         if row["role"] == "chair" and role in {"department_head", "vice_department_head", "class_rep"}:
             return True
-        if row["role"] == "head" and role in {"manager", "deputy", "club_head"}:
+        if row["role"] == "head" and role in {
+            "manager",
+            "deputy",
+            "club_head",
+            "club_vice",
+            "club_treasurer",
+        }:
             return True
-        if row["role"] == "department_head" and role in {"vice_department_head", "class_rep"}:
-            if target_unit["id"] in descendants(conn, row["unit_id"]):
-                return True
+        if (
+            row["role"] == "department_head"
+            and role in {"vice_department_head", "class_rep"}
+            and target_unit["id"] in descendants(conn, row["unit_id"])
+        ):
+            return True
     return False
 
 
-def validate_role_unit(target, role):
-    expected = {
-        "head": "organization",
-        "chair": "organization",
-        "department_head": "department",
-        "vice_department_head": "department",
-        "class_rep": "class",
-        "manager": "office",
-        "deputy": "office",
-        "club_head": "club",
-    }
-    if target["kind"] != expected[role]:
+def validate_role_unit(conn, target, role):
+    row = definition(conn, target["org_id"], role)
+    if not row or not row["active"]:
+        raise HTTPException(422, "선택한 단체에서 사용할 수 없는 역할입니다.")
+    if target["kind"] != row["scope_kind"]:
         raise HTTPException(422, "직책과 소속 단위 종류가 일치하지 않습니다.")
-    if (
-        role in {"chair", "department_head", "vice_department_head", "class_rep"}
-        and target["org_id"] != "council"
-    ):
-        raise HTTPException(422, "학과협의회에만 적용되는 역할입니다.")
-    if role == "head" and target["org_id"] == "council":
-        raise HTTPException(422, "학과협의회 최고 책임자는 의장입니다.")
-    if role == "club_head" and target["org_id"] != "clubs":
-        raise HTTPException(422, "연합동아리 역할입니다.")
-    if role in {"manager", "deputy"} and target["org_id"] not in {"student", "press"}:
-        raise HTTPException(422, "총학생회·신문방송국 부서 역할입니다.")
+
+
+def can_register(conn, actor, target, now):
+    if actor["is_admin"] and target["kind"] == "organization" and target["active"]:
+        return True
+    return any(
+        can_grant(conn, actor, target, row[0], now)
+        for row in conn.execute(
+            "SELECT code FROM role_definitions WHERE org_id=? AND active=1", (target["org_id"],)
+        )
+    )
+
+
+def can_create_child_unit(conn, actor, parent, now):
+    if not parent["active"] or not unit(conn, parent["org_id"])["active"]:
+        return False
+    if parent["kind"] not in {"organization", "department", "year"}:
+        return False
+    if actor["is_admin"]:
+        return True
+    if parent["org_id"] != "council" or parent["kind"] not in {"department", "year"}:
+        return False
+    for row in active_roles(conn, actor, now):
+        if row["role"] == "chair" and unit(conn, row["unit_id"])["org_id"] == "council":
+            return True
+        if row["role"] == "department_head" and parent["id"] in descendants(conn, row["unit_id"]):
+            return True
+    return False
+
+
+def role_label_for_unit(conn, target, role):
+    label = label_for(conn, target["org_id"], role)
+    if role == "class_rep" and target["kind"] == "class" and target["parent_id"]:
+        return f"{unit(conn, target['parent_id'])['name']} {target['name']} {label}"
+    return label

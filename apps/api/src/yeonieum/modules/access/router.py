@@ -10,18 +10,25 @@ from fastapi import Depends, HTTPException, Request, Response
 from pwdlib import PasswordHash
 
 from yeonieum.core.database import audit, connect, stamp, transaction
+from yeonieum.modules.access.audiences import sharing_groups
+from yeonieum.modules.access.catalog import ROLE_LABELS, SCOPE_LABELS, allowed_scope_kinds
+from yeonieum.modules.access.invitations import install_invitation_routes, issue_invitation
 from yeonieum.modules.access.policy import (
-    ROLE_LABELS,
     active_roles,
+    can_create_child_unit,
     can_grant,
+    can_register,
     deny,
     descendants,
     effective,
+    role_label_for_unit,
     scope,
     unit,
     validate_role_unit,
 )
-from yeonieum.modules.access.schemas import Grant, Login, NewUser, Revoke
+from yeonieum.modules.access.role_routes import install_role_routes
+from yeonieum.modules.access.schemas import Grant, Login, NewUser, RemoveUser, Revoke
+from yeonieum.modules.organizations.router import install_organization_routes
 
 
 def install_routes(app, database, now):
@@ -35,7 +42,7 @@ def install_routes(app, database, now):
     def actor(request: Request, conn=Depends(db)):
         token = request.cookies.get("yeonieum_session", "")
         row = conn.execute(
-            "SELECT u.* FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.token_hash=? AND s.expires_at>? AND u.active=1",
+            "SELECT u.* FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.token_hash=? AND s.expires_at>? AND u.active=1 AND u.email_verified=1",
             (hashlib.sha256(token.encode()).hexdigest(), stamp(now())),
         ).fetchone()
         if not row:
@@ -43,7 +50,10 @@ def install_routes(app, database, now):
         return dict(row)
 
     def safe_user(row):
-        return {key: row[key] for key in ["id", "name", "email", "identifier", "phone", "is_admin"]}
+        return {
+            key: row[key]
+            for key in ["id", "name", "email", "identifier", "phone", "is_admin", "email_verified"]
+        }
 
     @app.get("/api/health")
     def health():
@@ -57,7 +67,7 @@ def install_routes(app, database, now):
         # Always verify a hash even for unknown identifiers.
         fallback = conn.execute("SELECT password_hash FROM users LIMIT 1").fetchone()
         valid = PasswordHash.recommended().verify(data.password, row["password_hash"] if row else fallback[0])
-        if not row or not valid:
+        if not row or not valid or not row["email_verified"]:
             raise HTTPException(401, "계정 또는 비밀번호를 확인해 주세요.")
         token = secrets.token_urlsafe(32)
         with transaction(conn):
@@ -104,7 +114,7 @@ def install_routes(app, database, now):
         units = [
             {**dict(r), "in_scope": r["id"] in allowed}
             for r in conn.execute("SELECT * FROM units")
-            if r["id"] in visible
+            if r["id"] in visible or user["is_admin"]
         ]
         roles = []
         people = []
@@ -115,14 +125,26 @@ def install_routes(app, database, now):
             if r["role"] in {"head", "chair", "department_head"}:
                 contact_scope.update(descendants(conn, r["unit_id"]))
         for r in conn.execute("SELECT * FROM assignments"):
-            if r["unit_id"] in allowed or r["user_id"] == user["id"]:
-                roles.append({**dict(r), "effective": effective(conn, r, now())})
-        for r in conn.execute("SELECT * FROM users"):
+            if user["is_admin"] or r["unit_id"] in allowed or r["user_id"] == user["id"]:
+                roles.append(
+                    {
+                        **dict(r),
+                        "effective": effective(conn, r, now()),
+                        "role_label": role_label_for_unit(conn, unit(conn, r["unit_id"]), r["role"]),
+                    }
+                )
+        for r in conn.execute("SELECT * FROM users WHERE active=1"):
             homes = {
                 m[0] for m in conn.execute("SELECT unit_id FROM memberships WHERE user_id=?", (r["id"],))
             }
             if r["id"] == user["id"] or user["is_admin"] or homes & allowed:
-                person = {"id": r["id"], "name": r["name"], "unit_ids": sorted(homes)}
+                person = {
+                    "id": r["id"],
+                    "name": r["name"],
+                    "unit_ids": sorted(
+                        homes if user["is_admin"] or r["id"] == user["id"] else homes & allowed
+                    ),
+                }
                 if r["id"] == user["id"] or user["is_admin"] or homes & contact_scope:
                     person.update(safe_user(r))
                 people.append(person)
@@ -139,11 +161,17 @@ def install_routes(app, database, now):
                         "org_name": unit(conn, unit(conn, r["unit_id"])["org_id"])["name"],
                     }
                 )
+        definitions = [
+            dict(r)
+            for r in conn.execute("SELECT * FROM role_definitions")
+            if user["is_admin"] or any(u["org_id"] == r["org_id"] for u in units)
+        ]
         options = [
-            {"unit_id": u["id"], "role": r}
+            {"unit_id": u["id"], "role": r["code"], "label": role_label_for_unit(conn, dict(u), r["code"])}
             for u in conn.execute("SELECT * FROM units")
-            for r in ROLE_LABELS
-            if can_grant(conn, user, dict(u), r, now()) and valid_option(dict(u), r)
+            for r in definitions
+            if r["org_id"] == u["org_id"]
+            if can_grant(conn, user, dict(u), r["code"], now())
         ]
         return {
             "units": units,
@@ -151,44 +179,141 @@ def install_routes(app, database, now):
             "assignments": roles,
             "contacts": contacts,
             "grant_options": options,
-            "roles": ROLE_LABELS,
+            "roles": {**ROLE_LABELS, **{r["code"]: r["label"] for r in definitions if not r["builtin"]}},
+            "role_definitions": definitions,
+            "can_manage_role_types": bool(user["is_admin"]),
+            "unit_creation_options": [
+                {
+                    "parent_id": u["id"],
+                    "org_id": u["org_id"],
+                    "kind": {
+                        "organization": "department"
+                        if u["org_id"] == "council"
+                        else "club"
+                        if u["org_id"] == "clubs"
+                        else "office",
+                        "department": "year",
+                        "year": "class",
+                    }[u["kind"]],
+                }
+                for u in units
+                if can_create_child_unit(conn, user, u, now())
+            ],
+            "sharing_groups": sharing_groups(conn, user, now()),
+            "scope_kinds": SCOPE_LABELS,
+            "role_scope_kinds": {
+                u["id"]: sorted(allowed_scope_kinds(u["id"])) for u in units if u["kind"] == "organization"
+            },
             "server_time": stamp(now()),
         }
 
-    def valid_option(target, role):
-        try:
-            validate_role_unit(target, role)
-            return True
-        except HTTPException:
-            return False
-
     @app.post("/api/users", status_code=201)
-    def create_user(data: NewUser, user=Depends(actor), conn=Depends(db)):
+    def create_user(data: NewUser, response: Response, user=Depends(actor), conn=Depends(db)):
         with transaction(conn):
-            target = unit(conn, data.unit_id)
-            if not any(
-                can_grant(conn, user, target, r, now()) and valid_option(target, r) for r in ROLE_LABELS
-            ):
+            targets = [unit(conn, ident) for ident in data.unit_ids]
+            if not all(can_register(conn, user, target, now()) for target in targets):
                 deny()
-            if conn.execute(
-                "SELECT id FROM users WHERE identifier=? OR email=?", (data.identifier, data.email)
-            ).fetchone():
-                raise HTTPException(409, "이미 등록된 계정 또는 이메일입니다.")
-            ident = str(uuid4())
-            conn.execute(
-                "INSERT INTO users VALUES (?,?,?,?,?,?,0,1)",
-                (
+            matches = conn.execute(
+                "SELECT * FROM users WHERE identifier=? OR lower(email)=?", (data.identifier, data.email)
+            ).fetchall()
+            restored = False
+            if matches:
+                existing = matches[0]
+                if (
+                    len(matches) != 1
+                    or existing["active"]
+                    or existing["identifier"] != data.identifier
+                    or existing["email"].lower() != data.email
+                ):
+                    raise HTTPException(
+                        409, "이미 사용 중이거나 기존 계정 정보와 일치하지 않는 학번·이메일입니다."
+                    )
+                if not user["is_admin"] or existing["is_admin"]:
+                    deny("삭제 계정 복구는 담당 선생님만 할 수 있습니다.")
+                ident = existing["id"]
+                conn.execute(
+                    "UPDATE users SET name=?,email=?,phone=?,password_hash=?,active=1,email_verified=0 WHERE id=?",
+                    (
+                        data.name,
+                        data.email,
+                        data.phone,
+                        PasswordHash.recommended().hash(data.password),
+                        ident,
+                    ),
+                )
+                conn.execute("DELETE FROM sessions WHERE user_id=?", (ident,))
+                conn.execute(
+                    "UPDATE assignments SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL",
+                    (stamp(now()), ident),
+                )
+                conn.execute("DELETE FROM memberships WHERE user_id=?", (ident,))
+                restored = True
+                response.status_code = 200
+            else:
+                ident = str(uuid4())
+                conn.execute(
+                    "INSERT INTO users (id,name,email,identifier,phone,password_hash,is_admin,active,email_verified) VALUES (?,?,?,?,?,?,0,1,0)",
+                    (
+                        ident,
+                        data.name,
+                        data.email,
+                        data.identifier,
+                        data.phone,
+                        PasswordHash.recommended().hash(data.password),
+                    ),
+                )
+            for target in targets:
+                conn.execute("INSERT INTO memberships VALUES (?,?)", (ident, target["id"]))
+            for org in {t["org_id"] for t in targets}:
+                audit(
+                    conn,
+                    user,
+                    org,
+                    "user.restored" if restored else "user.registered",
                     ident,
-                    data.name,
-                    data.email,
-                    data.identifier,
-                    data.phone,
-                    PasswordHash.recommended().hash(data.password),
-                ),
+                    {"unit_ids": [t["id"] for t in targets if t["org_id"] == org]},
+                )
+            issue_invitation(conn, user, ident, now())
+        return {"id": ident, "name": data.name, "restored": restored, "delivery": "local-preview"}
+
+    @app.post("/api/users/{user_id}/remove")
+    def remove_user(user_id: str, data: RemoveUser, user=Depends(actor), conn=Depends(db)):
+        with transaction(conn):
+            if not user["is_admin"]:
+                deny("담당 선생님만 담당자를 제거할 수 있습니다.")
+            target = conn.execute("SELECT * FROM users WHERE id=? AND active=1", (user_id,)).fetchone()
+            if not target:
+                raise HTTPException(404, "담당자를 찾을 수 없습니다.")
+            if target["is_admin"] or user_id == user["id"]:
+                deny("관리자 계정은 담당자 제거 대상이 아닙니다.")
+            conn.execute("UPDATE users SET active=0 WHERE id=?", (user_id,))
+            conn.execute(
+                "UPDATE invitations SET revoked_at=? WHERE user_id=? AND used_at IS NULL AND revoked_at IS NULL",
+                (stamp(now()), user_id),
             )
-            conn.execute("INSERT INTO memberships VALUES (?,?)", (ident, data.unit_id))
-            audit(conn, user, target["org_id"], "user.registered", ident, {"unit_id": data.unit_id})
-        return {"id": ident, "name": data.name}
+            conn.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
+            for row in conn.execute(
+                "SELECT * FROM assignments WHERE user_id=? AND revoked_at IS NULL", (user_id,)
+            ).fetchall():
+                conn.execute("UPDATE assignments SET revoked_at=? WHERE id=?", (stamp(now()), row["id"]))
+                audit(
+                    conn,
+                    user,
+                    unit(conn, row["unit_id"])["org_id"],
+                    "role.revoked",
+                    row["id"],
+                    {"reason": "담당자 제거"},
+                )
+            orgs = {
+                r[0]
+                for r in conn.execute(
+                    "SELECT DISTINCT u.org_id FROM memberships m JOIN units u ON u.id=m.unit_id WHERE m.user_id=?",
+                    (user_id,),
+                )
+            }
+            for org in orgs:
+                audit(conn, user, org, "user.removed", user_id, {})
+        return {"ok": True}
 
     @app.post("/api/assignments", status_code=201)
     def grant(data: Grant, user=Depends(actor), conn=Depends(db)):
@@ -199,7 +324,7 @@ def install_routes(app, database, now):
             raise HTTPException(422, "종료는 시작 이후여야 합니다.")
         with transaction(conn):
             target = unit(conn, data.unit_id)
-            validate_role_unit(target, data.role)
+            validate_role_unit(conn, target, data.role)
             if data.user_id == user["id"]:
                 deny("본인 역할을 스스로 변경할 수 없습니다.")
             if not can_grant(conn, user, target, data.role, now()):
@@ -212,7 +337,17 @@ def install_routes(app, database, now):
             homes = {
                 r[0] for r in conn.execute("SELECT unit_id FROM memberships WHERE user_id=?", (data.user_id,))
             }
-            if not homes & descendants(conn, target["id"]):
+            # Authorized organization leaders can explicitly add another scoped
+            # affiliation in their own organization while granting a role. Lower
+            # officers still need an existing matching affiliation.
+            route_affiliation = any(unit(conn, home)["org_id"] == target["org_id"] for home in homes) and (
+                user["is_admin"]
+                or any(
+                    r["role"] in {"chair", "head"} and unit(conn, r["unit_id"])["org_id"] == target["org_id"]
+                    for r in active_roles(conn, user, now())
+                )
+            )
+            if not homes & descendants(conn, target["id"]) and not route_affiliation:
                 raise HTTPException(422, "대상 계정의 소속과 역할 범위가 일치하지 않습니다.")
             parent = None
             if data.role == "chair":
@@ -242,7 +377,7 @@ def install_routes(app, database, now):
                     and start < row["ends_at"]
                     and (
                         row["user_id"] == data.user_id
-                        or data.role in {"head", "chair", "department_head", "class_rep"}
+                        or data.role in {"head", "chair", "department_head", "class_rep", "club_head"}
                     )
                 ):
                     raise HTTPException(409, "같은 범위·기간에 중복된 역할이 있습니다.")
@@ -263,6 +398,11 @@ def install_routes(app, database, now):
                     data.election_note,
                 ),
             )
+            if route_affiliation and target["id"] != target["org_id"]:
+                conn.execute("INSERT OR IGNORE INTO memberships VALUES (?,?)", (data.user_id, target["id"]))
+                conn.execute(
+                    "DELETE FROM memberships WHERE user_id=? AND unit_id=?", (data.user_id, target["org_id"])
+                )
             audit(
                 conn,
                 user,
@@ -322,3 +462,7 @@ def install_routes(app, database, now):
             for r in conn.execute("SELECT * FROM audit ORDER BY at DESC LIMIT 1000")
             if r["org_id"] in orgs
         ][:100]
+
+    install_organization_routes(app, db, actor, now)
+    install_invitation_routes(app, db, actor, now)
+    install_role_routes(app, db, actor, now)
