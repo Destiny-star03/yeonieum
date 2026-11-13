@@ -1,6 +1,6 @@
 # 연이음 Git 협업·배포 규칙
 
-적용일: 2026-11-12. 이 프로젝트는 GitHub와 GitHub Actions를 사용한다. `main`은 운영 배포 기준, `develop`은 개발 통합, 작업은 별도 브랜치에서 진행한다. 현재는 앱·서버·CD가 없는 준비 단계다.
+적용일: 2026-11-12. 이 프로젝트는 GitHub와 GitHub Actions를 사용한다. `main`은 운영 배포 기준, `develop`은 개발 통합, 작업은 별도 브랜치에서 진행한다. 현재 로컬 조직·권한 앱과 검사 CI가 있으며 AWS·운영 CD는 미구성 상태다.
 
 ## 브랜치와 PR 경로
 
@@ -79,7 +79,7 @@ git push -u origin feature/git-workflow
 
 PR은 feature/bugfix에서 develop으로 연다. 제목도 커밋 형식을 따르고, 문제·변경 동작·관련 Issue/요구 ID·검증 결과·영향을 [PR 양식](../.github/PULL_REQUEST_TEMPLATE.md)에 기록한다. 비어 있거나 실행하지 않은 검증을 성공으로 표시하지 않는다.
 
-두 필수 CI는 `repository-checks`, `git-policy`다. 후자는 브랜치 이름·PR 대상·PR 제목과 새 일반 커밋을 검사한다. 공식 main/develop 경로는 원본 저장소의 브랜치인지도 확인한다. PR 제목 수정에도 재실행하며, 신뢰하지 않는 PR 제목·브랜치를 셸 문자열에 직접 삽입하지 않는다. Git 초기 이력을 소급해 새 규칙으로 수정하지 않는다.
+필수 CI는 `repository-checks`, `git-policy`, `api-tests`, `web-checks`다. API는 Ruff·통합 테스트, 웹은 서식·타입·빌드·브라우저 검사를 수행한다. 후자는 브랜치 이름·PR 대상·PR 제목과 새 일반 커밋을 검사한다. 공식 main/develop 경로는 원본 저장소의 브랜치인지도 확인한다. PR 제목 수정에도 재실행하며, 신뢰하지 않는 PR 제목·브랜치를 셸 문자열에 직접 삽입하지 않는다. Git 초기 이력을 소급해 새 규칙으로 수정하지 않는다.
 
 검토와 CI 완료 후 PR로 병합한다. main에 대한 기능 브랜치 직접 PR은 막고 develop·release·hotfix만 허용한다. hotfix는 main과 develop 양쪽에 반영한 뒤 정리한다. 병합 방법은 Git 이력과 팀 규칙에 맞춰 선택하며, 기본적으로 merge commit을 사용해 작은 커밋을 보존한다.
 
@@ -87,7 +87,7 @@ PR은 feature/bugfix에서 develop으로 연다. 제목도 커밋 형식을 따�
 
 ## 서버 측 권한과 보호
 
-[branch-quality 설정](../infra/github/branch-quality.json)은 main/develop에 PR·두 CI 성공·최신 기준 반영·검토 대화 해결을 요구하고, 강제 푸시와 삭제를 제한한다. 이 품질 규칙에는 우회자를 두지 않는다.
+[branch-quality 설정](../infra/github/branch-quality.json)은 main/develop에 PR·네 CI 성공·최신 기준 반영·검토 대화 해결을 요구하고, 강제 푸시와 삭제를 제한한다. 이 품질 규칙에는 우회자를 두지 않는다.
 
 [main-maintainer 설정](../infra/github/main-maintainer.json)은 main 갱신을 현 운영 책임자 `Destiny-star03`의 PR 병합으로 제한한다. PR 전용 예외는 이 갱신 제한에만 적용하고 별도 품질 규칙은 그대로 적용한다. develop은 쓰기 권한이 있는 개발자가 PR·CI 조건 충족 후 병합한다.
 

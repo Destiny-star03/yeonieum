@@ -5,3 +5,5 @@
 로그인→조직/역할 선택→자료 등록·검색→예산·지출·정산→인수인계 흐름을 [수용 기준](../../docs/ACCEPTANCE.md)에 연결한다. 가상 자료와 권한이 다른 계정으로 검증하고, 단위·API 통합 테스트를 이곳에 중복 작성하지 않는다.
 
 브라우저 테스트 도구를 선택하면 실행 환경·데이터 준비·정리 방법과 실제 명령을 여기에 기록한다.
+
+조직·권한의 실제 브라우저 흐름은 `access.spec.ts`다. 실행 도구와 앱 UI 로그인 보조 함수는 웹 앱의 Playwright 설정·`apps/web/tests/browser-fixtures.ts`가 소유한다. 저장소 루트에서 `npm run test:e2e --prefix apps/web`로 실행한다. 이 검사는 독립 가상 SQLite DB에서 로컬 웹과 API를 연결하며 AWS 검증이 아니다.

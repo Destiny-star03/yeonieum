@@ -1,0 +1,28 @@
+{
+  "name": "yeonieum-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "test:e2e": "playwright test",
+    "format": "prettier --write src vite.config.ts playwright.config.ts tests ../../tests/e2e/*.ts",
+    "format:check": "prettier --check src vite.config.ts playwright.config.ts tests ../../tests/e2e/*.ts"
+  },
+  "dependencies": {
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.65.0",
+    "@types/node": "26.6.6",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.3.0",
+    "prettier": "3.10.0",
+    "typescript": "7.0.2",
+    "vite": "8.3.8"
+  }
+}
