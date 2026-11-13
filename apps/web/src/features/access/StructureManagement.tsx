@@ -1,7 +1,21 @@
-import { useRef, useState, type FormEvent } from "react";
-import { api, type Workspace, type RoleDefinition } from "../../shared/api";
-type Props = { workspace: Workspace; onChanged: () => Promise<void> };
-export default function StructureManagement({ workspace, onChanged }: Props) {
+import ConvertClassDialog from "./ConvertClassDialog";
+import { useEffect, useRef, useState, type FormEvent } from "react";
+import {
+  api,
+  type Workspace,
+  type RoleDefinition,
+  type Unit,
+} from "../../shared/api";
+type Props = {
+  workspace: Workspace;
+  onChanged: () => Promise<void>;
+  onClassReady: (unitId: string) => void;
+};
+export default function StructureManagement({
+  workspace,
+  onChanged,
+  onClassReady,
+}: Props) {
   const [orgId, setOrgId] = useState(""),
     [parentId, setParentId] = useState(""),
     [unitName, setUnitName] = useState(""),
@@ -13,6 +27,21 @@ export default function StructureManagement({ workspace, onChanged }: Props) {
     [target, setTarget] = useState<RoleDefinition | null>(null),
     [confirmation, setConfirmation] = useState("");
   const dialog = useRef<HTMLDialogElement>(null);
+  const unitDialog = useRef<HTMLDialogElement>(null);
+  const [unitTarget, setUnitTarget] = useState<Unit | null>(null);
+  const [unitConfirmed, setUnitConfirmed] = useState(false);
+  const [convertTarget, setConvertTarget] = useState<Unit | null>(null);
+  useEffect(() => {
+    if (orgId && !workspace.units.some((u) => u.id === orgId && u.active)) {
+      setOrgId("");
+      setParentId("");
+    } else if (
+      parentId &&
+      !workspace.unit_creation_options.some((o) => o.parent_id === parentId)
+    ) {
+      setParentId("");
+    }
+  }, [workspace, orgId, parentId]);
   const canManageRoles = workspace.can_manage_role_types;
   const orgs = workspace.units.filter(
     (u) =>
@@ -32,18 +61,28 @@ export default function StructureManagement({ workspace, onChanged }: Props) {
   const types = workspace.role_definitions.filter(
     (t) => t.org_id === orgId && t.active,
   );
+  const childUnits = workspace.units.filter(
+    (u) =>
+      u.active &&
+      u.kind !== "organization" &&
+      u.org_id === orgId &&
+      (!parentId || u.parent_id === parentId),
+  );
   function path(id: string): string {
     const u = workspace.units.find((u) => u.id === id);
     return u ? (u.parent_id ? `${path(u.parent_id)} / ${u.name}` : u.name) : id;
   }
-  async function perform(action: () => Promise<unknown>, message: string) {
+  async function perform(
+    action: () => Promise<unknown>,
+    message: string | (() => string),
+  ) {
     setBusy(true);
     setError("");
     setNotice("");
     try {
       await action();
       await onChanged();
-      setNotice(message);
+      setNotice(typeof message === "function" ? message() : message);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -52,14 +91,39 @@ export default function StructureManagement({ workspace, onChanged }: Props) {
   }
   async function addUnit(e: FormEvent) {
     e.preventDefault();
+    let restored = false;
+    let createdId = "";
+    await perform(
+      async () => {
+        const result = await api<{ id: string; restored: boolean }>("/units", {
+          parent_id: parentId,
+          kind: unitKind,
+          name: unitName,
+        });
+        restored = result.restored;
+        createdId = result.id;
+        setUnitName("");
+      },
+      () => {
+        if (unitKind === "class" && createdId) onClassReady(createdId);
+        return restored
+          ? "삭제했던 하위 조직을 복원했습니다. 이전 역할은 자동 복구되지 않습니다."
+          : unitKind === "year"
+            ? "하위 조직을 등록했습니다. 현재 항목은 학년입니다. 상위 조직에서 이 학년을 선택한 뒤 A반·SAP반 등을 등록해 주세요."
+            : "하위 조직을 등록했습니다. 역할 부여에서 해당 범위를 선택할 수 있습니다.";
+      },
+    );
+  }
+  async function removeUnit(e: FormEvent) {
+    e.preventDefault();
+    if (!unitTarget || !unitConfirmed) return;
     await perform(async () => {
-      await api("/units", {
-        parent_id: parentId,
-        kind: unitKind,
-        name: unitName,
+      await api(`/units/${unitTarget.id}/remove`, {
+        confirmed: unitConfirmed,
       });
-      setUnitName("");
-    }, "하위 조직을 등록했습니다. 역할 부여에서 해당 범위를 선택할 수 있습니다.");
+      unitDialog.current?.close();
+      setUnitTarget(null);
+    }, "하위 조직과 그 아래 조직을 삭제하고 역할을 회수했습니다. 계정과 과거 이력은 보존됩니다. 조직을 복원해도 역할은 다시 부여해야 합니다.");
   }
   async function addRole(e: FormEvent) {
     e.preventDefault();
@@ -110,11 +174,26 @@ export default function StructureManagement({ workspace, onChanged }: Props) {
       </label>
       {orgId && (
         <>
+          {orgId === "council" && (
+            <p className="form-note academic-structure-guide">
+              <strong>반대표 등록 순서: 학과 → 학년 → 반 → 반대표 역할</strong>
+              <br />
+              학과를 상위 조직으로 선택하면 학년을 등록합니다. 반은 반드시 해당
+              학년을 상위 조직으로 선택해 등록하세요. 예: 스마트소프트웨어학과 →
+              1학년 → A반.
+            </p>
+          )}
           <div
             className={`structure-forms ${canManageRoles ? "" : "single-column"}`}
           >
             <form onSubmit={addUnit}>
-              <h3>하위 조직 등록</h3>
+              <h3>
+                {unitKind === "year"
+                  ? "학년 등록"
+                  : unitKind === "class"
+                    ? "반 등록"
+                    : "하위 조직 등록"}
+              </h3>
               <label>
                 상위 조직
                 <select
@@ -150,7 +229,22 @@ export default function StructureManagement({ workspace, onChanged }: Props) {
                   }
                 />
               </label>
-              <button className="primary" disabled={busy || !unitKind}>
+              {unitKind === "year" &&
+                /^[0-9]+\s*[A-Za-z]+(?:반)?$/.test(unitName.trim()) && (
+                  <p className="error" role="alert">
+                    지금은 학년 등록입니다. 1A·3SAP 대신 1학년·3학년을 등록하고,
+                    그 학년 아래에 A반·SAP반을 추가해 주세요.
+                  </p>
+                )}
+              <button
+                className="primary"
+                disabled={
+                  busy ||
+                  !unitKind ||
+                  (unitKind === "year" &&
+                    /^[0-9]+\s*[A-Za-z]+(?:반)?$/.test(unitName.trim()))
+                }
+              >
                 하위 조직 등록
               </button>
             </form>
@@ -188,6 +282,60 @@ export default function StructureManagement({ workspace, onChanged }: Props) {
               </form>
             )}
           </div>
+          <div className="registered-units">
+            <h3>등록된 하위 조직</h3>
+            <p className="muted">
+              상위 조직을 선택하면 바로 아래 조직을 표시합니다. 같은 이름으로
+              다시 등록하면 삭제한 조직을 복원합니다.
+            </p>
+            <ul className="unit-list">
+              {childUnits.map((u) => (
+                <li key={u.id} data-unit-id={u.id}>
+                  <div>
+                    <strong>{path(u.id)}</strong>
+                    <small>{workspace.scope_kinds[u.kind]}</small>
+                  </div>
+                  {u.kind === "year" &&
+                    (workspace.unit_deletion_options || []).includes(u.id) &&
+                    !workspace.units.some(
+                      (child) => child.parent_id === u.id,
+                    ) &&
+                    !workspace.assignments.some((a) => a.unit_id === u.id) && (
+                      <button
+                        type="button"
+                        className="text-button"
+                        disabled={busy}
+                        aria-label={`${path(u.id)} 반으로 변경`}
+                        onClick={() => setConvertTarget(u)}
+                      >
+                        반으로 변경
+                      </button>
+                    )}
+                  {(workspace.unit_deletion_options || []).includes(u.id) ? (
+                    <button
+                      className="text-button"
+                      disabled={busy}
+                      aria-label={`${path(u.id)} 하위 조직 삭제`}
+                      onClick={() => {
+                        setUnitTarget(u);
+                        setUnitConfirmed(false);
+                        setError("");
+                        setNotice("");
+                        unitDialog.current?.showModal();
+                      }}
+                    >
+                      삭제
+                    </button>
+                  ) : (
+                    <small>삭제 권한 없음</small>
+                  )}
+                </li>
+              ))}
+            </ul>
+            {!childUnits.length && (
+              <p className="muted">표시할 하위 조직이 없습니다.</p>
+            )}
+          </div>
           {canManageRoles && (
             <ul className="role-type-list">
               {types.map((t) => (
@@ -222,7 +370,7 @@ export default function StructureManagement({ workspace, onChanged }: Props) {
           )}
         </>
       )}
-      {error && !target && (
+      {error && !target && !unitTarget && (
         <p className="error" role="alert">
           {error}
         </p>
@@ -232,6 +380,105 @@ export default function StructureManagement({ workspace, onChanged }: Props) {
           {notice}
         </p>
       )}
+      <ConvertClassDialog
+        target={convertTarget}
+        workspace={workspace}
+        onClose={() => setConvertTarget(null)}
+        onChanged={onChanged}
+        onComplete={(id) => {
+          setConvertTarget(null);
+          setNotice(
+            "반으로 변경했습니다. 역할 부여에서 반대표를 선택하고 대상 담당자를 지정해 주세요.",
+          );
+          onClassReady(id);
+        }}
+        onPrepareYear={(departmentId, yearName) => {
+          setConvertTarget(null);
+          setParentId(departmentId);
+          setUnitName(yearName);
+          setNotice(
+            "학년을 등록·복원한 다음, 기존 항목의 ‘반으로 변경’을 다시 눌러 주세요. 삭제된 학년 복원 시 함께 삭제된 하위 조직도 복원되며, 회수된 역할은 복구되지 않습니다.",
+          );
+        }}
+      />
+      <dialog
+        ref={unitDialog}
+        aria-labelledby="unit-delete-title"
+        onCancel={(e) => {
+          e.preventDefault();
+          if (!busy) {
+            unitDialog.current?.close();
+            setUnitTarget(null);
+            setError("");
+          }
+        }}
+      >
+        <form onSubmit={removeUnit}>
+          <h2 className="delete-warning-title" id="unit-delete-title">
+            정말로 삭제하시겠습니까?
+          </h2>
+          <p className="delete-target">
+            삭제 대상: <strong>{unitTarget?.name}</strong>
+          </p>
+          <section className="delete-notice" id="unit-delete-notice">
+            <h3>삭제 전 꼭 확인해 주세요</h3>
+            <ul>
+              <li>
+                <strong>
+                  선택한 하위 조직과 그 아래 조직이 함께 삭제됩니다.
+                </strong>
+              </li>
+              <li>
+                해당 조직의 <strong>현재·예약 역할이 모두 회수</strong>되어 업무
+                권한을 사용할 수 없습니다.
+              </li>
+              {unitTarget?.kind === "department" && (
+                <li>
+                  학회장 자격에 연결된 <strong>의장 자격도 종료</strong>됩니다.
+                </li>
+              )}
+              <li>담당자 계정과 과거 이력은 보존됩니다.</li>
+              <li>
+                같은 상위 조직에 같은 이름으로 재등록하면 조직을 복원할 수
+                있지만, <strong>역할은 다시 부여해야 합니다.</strong> 이전에
+                따로 삭제한 하위 조직은 함께 복원되지 않습니다.
+              </li>
+            </ul>
+          </section>
+          <label className="delete-consent">
+            <input
+              type="checkbox"
+              required
+              checked={unitConfirmed}
+              disabled={busy}
+              onChange={(e) => setUnitConfirmed(e.target.checked)}
+              aria-describedby="unit-delete-notice"
+            />
+            <strong>유의사항을 확인했으며, 삭제하겠습니다.</strong>
+          </label>
+          {error && (
+            <p className="error" role="alert">
+              {error}
+            </p>
+          )}
+          <div className="dialog-actions">
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                unitDialog.current?.close();
+                setUnitTarget(null);
+                setError("");
+              }}
+            >
+              취소
+            </button>
+            <button className="danger" disabled={busy || !unitConfirmed}>
+              하위 조직 삭제
+            </button>
+          </div>
+        </form>
+      </dialog>
       <dialog
         ref={dialog}
         onCancel={(e) => {

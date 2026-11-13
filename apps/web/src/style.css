@@ -769,6 +769,10 @@ td small {
   font-size: 12px;
   line-height: 1.8;
 }
+.panel > .error,
+.panel > .success {
+  margin-top: 20px;
+}
 .audit-row {
   display: flex;
   align-items: flex-start;
@@ -1530,4 +1534,140 @@ dialog form > p {
   align-items: center;
   flex-wrap: wrap;
   margin-top: 8px;
+}
+
+.registered-units {
+  margin: 24px 0;
+}
+.unit-list {
+  list-style: none;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.unit-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  background: var(--soft);
+  border-radius: 9px;
+  min-width: 0;
+}
+.unit-list li > div {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.unit-list strong {
+  display: block;
+  font-size: 12px;
+}
+.unit-list small {
+  display: block;
+  font-size: 10px;
+  margin-top: 5px;
+}
+.unit-list button,
+.unit-list li > small {
+  flex-shrink: 0;
+}
+
+.delete-warning-title {
+  font-size: 23px;
+  font-weight: 800;
+  color: #8b2f23;
+  line-height: 1.4;
+}
+.delete-target {
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+.delete-notice {
+  border-left: 4px solid #8b2f23;
+  background: #fff4f1;
+  padding: 15px 17px;
+  border-radius: 8px;
+}
+.delete-notice h3 {
+  font-size: 14px;
+  font-weight: 750;
+  margin: 0 0 10px;
+  color: #8b2f23;
+}
+.delete-notice ul {
+  margin: 0;
+  padding-left: 18px;
+}
+.delete-notice li {
+  font-size: 12px;
+  line-height: 1.8;
+  margin: 7px 0;
+}
+.delete-consent {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 11px;
+  padding: 15px;
+  background: var(--soft);
+  border: 1px solid #8b2f23;
+  border-radius: 9px;
+  cursor: pointer;
+}
+.delete-consent input {
+  width: 20px;
+  height: 20px;
+  min-height: 20px;
+  padding: 0;
+  margin: 1px 0 0;
+  flex-shrink: 0;
+  accent-color: #8b2f23;
+}
+.delete-consent strong {
+  font-size: 14px;
+  font-weight: 750;
+  line-height: 1.6;
+}
+
+.people-more {
+  width: 100%;
+  margin-top: 14px;
+  background: var(--soft);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  font-weight: 650;
+}
+.assignment-organizations {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(140px, 100%), 1fr));
+  gap: 8px;
+  margin: 18px 0;
+}
+.assignment-organizations button {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  text-align: left;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  min-width: 0;
+}
+.assignment-organizations button strong {
+  overflow-wrap: anywhere;
+}
+.assignment-organizations button span {
+  font-size: 12px;
+  white-space: nowrap;
+}
+.assignment-organizations button[aria-pressed="true"] {
+  background: var(--ink);
+  color: var(--canvas);
+  border-color: var(--ink);
+}
+.assignment-group-heading {
+  font-size: 15px;
+  margin: 18px 0 12px;
 }

@@ -57,6 +57,10 @@ def connect(path):
     conn.executescript(SCHEMA)
     if "active" not in {r[1] for r in conn.execute("PRAGMA table_info(units)")}:
         conn.execute("ALTER TABLE units ADD COLUMN active INTEGER NOT NULL DEFAULT 1")
+    if "deletion_root_id" not in {r[1] for r in conn.execute("PRAGMA table_info(units)")}:
+        conn.execute("ALTER TABLE units ADD COLUMN deletion_root_id TEXT REFERENCES units(id)")
+        # Existing inactive units came from whole-organization deletion.
+        conn.execute("UPDATE units SET deletion_root_id=org_id WHERE active=0")
     if "email_verified" not in {r[1] for r in conn.execute("PRAGMA table_info(users)")}:
         conn.execute("ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 1")
     return conn

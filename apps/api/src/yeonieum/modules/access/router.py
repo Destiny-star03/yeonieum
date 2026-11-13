@@ -18,6 +18,7 @@ from yeonieum.modules.access.policy import (
     can_create_child_unit,
     can_grant,
     can_register,
+    can_remove_child_unit,
     deny,
     descendants,
     effective,
@@ -199,6 +200,7 @@ def install_routes(app, database, now):
                 for u in units
                 if can_create_child_unit(conn, user, u, now())
             ],
+            "unit_deletion_options": [u["id"] for u in units if can_remove_child_unit(conn, user, u, now())],
             "sharing_groups": sharing_groups(conn, user, now()),
             "scope_kinds": SCOPE_LABELS,
             "role_scope_kinds": {

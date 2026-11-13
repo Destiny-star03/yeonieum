@@ -47,6 +47,9 @@ test("의장 겸임 확인, 하위 역할 부여, 새로고침 후 기록 유지
   );
   await page.reload();
   await page.getByRole("button", { name: "조직 · 권한", exact: true }).click();
+  await page
+    .getByRole("button", { name: "학과협의회 역할 보기", exact: true })
+    .click();
   await expect(
     page.locator(".assignment").filter({ hasText: "가상 신규 담당자" }),
   ).toContainText("2학년 / A반");
@@ -67,6 +70,10 @@ test("모바일 반대표의 재위임과 연락처 제한, 로그아웃", async
   await expect(
     page.getByText("현재 역할에는 추가 역할 부여 권한이 없습니다."),
   ).toBeVisible();
+  await page
+    .locator(".people-panel")
+    .getByRole("button", { name: /더보기 · 나머지 담당자/ })
+    .click();
   await expect(
     page.getByRole("cell", { name: "가상 반대표", exact: true }),
   ).toBeVisible();
@@ -511,6 +518,9 @@ test("학회장 카드에서 의장 표시를 지정하고 해제해도 학회�
 }) => {
   await login(page, "staff-demo");
   await page.getByRole("button", { name: "조직 · 권한", exact: true }).click();
+  await page
+    .getByRole("button", { name: "학과협의회 역할 보기", exact: true })
+    .click();
   const outgoing = page.locator(".assignment").filter({ hasText: "가상 의장" });
   await expect(outgoing).toHaveCount(1);
   await expect(outgoing.locator(".chair-badge")).toHaveText("의장");
@@ -553,4 +563,266 @@ test("학회장 카드에서 의장 표시를 지정하고 해제해도 학회�
   expect(chair.user_id).toBe(parent.user_id);
   expect(chair.starts_at).toBe(parent.starts_at);
   expect(chair.ends_at).toBe(parent.ends_at);
+});
+
+test("학회장이 하위 조직을 삭제하고 같은 이름으로 하위 구조를 복원", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await login(page, "student-head");
+  await page.getByRole("button", { name: "조직 · 권한", exact: true }).click();
+  const panel = page.locator(".structure-management");
+  await panel.getByLabel("관리할 단체").selectOption("council");
+  await panel.getByLabel("상위 조직").selectOption("mechanical");
+  await panel.getByLabel("하위 조직명").fill("4학년");
+  await panel
+    .getByRole("button", { name: "하위 조직 등록", exact: true })
+    .click();
+  await expect(panel.getByRole("status")).toContainText(
+    "하위 조직을 등록했습니다",
+  );
+  const yearRow = panel.locator(".unit-list li").filter({ hasText: "4학년" });
+  const yearId = await yearRow.getAttribute("data-unit-id");
+  await panel.getByLabel("상위 조직").selectOption(yearId!);
+  await panel.getByLabel("하위 조직명").fill("C반");
+  await panel
+    .getByRole("button", { name: "하위 조직 등록", exact: true })
+    .click();
+  await expect(panel.getByRole("status")).toContainText(
+    "하위 조직을 등록했습니다",
+  );
+  const classId = await panel
+    .locator(".unit-list li")
+    .filter({ hasText: "C반" })
+    .getAttribute("data-unit-id");
+  await panel.getByLabel("상위 조직").selectOption("mechanical");
+  await yearRow
+    .getByRole("button", {
+      name: "학과협의회 / 기계공학과 / 4학년 하위 조직 삭제",
+      exact: true,
+    })
+    .click();
+  const removal = page.getByRole("dialog");
+  await expect(
+    removal.getByRole("heading", {
+      name: "정말로 삭제하시겠습니까?",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(removal.locator(".delete-notice")).toContainText(
+    "현재·예약 역할이 모두 회수",
+  );
+  await expect(removal.locator(".delete-notice")).toContainText(
+    "계정과 과거 이력은 보존",
+  );
+  const consent = removal.getByRole("checkbox", {
+    name: "유의사항을 확인했으며, 삭제하겠습니다.",
+  });
+  await expect(consent).not.toBeChecked();
+  await expect(
+    removal.getByRole("button", { name: "하위 조직 삭제", exact: true }),
+  ).toBeDisabled();
+  await consent.check();
+  await expect(
+    removal.getByRole("button", { name: "하위 조직 삭제", exact: true }),
+  ).toBeEnabled();
+  await removal.getByRole("button", { name: "취소", exact: true }).click();
+  await yearRow
+    .getByRole("button", {
+      name: "학과협의회 / 기계공학과 / 4학년 하위 조직 삭제",
+      exact: true,
+    })
+    .click();
+  await expect(consent).not.toBeChecked();
+  await consent.check();
+  await removal
+    .getByRole("button", { name: "하위 조직 삭제", exact: true })
+    .click();
+  await expect(removal).not.toBeVisible();
+  await expect(yearRow).toHaveCount(0);
+  const work = await (await page.request.get("/api/workspace")).json();
+  expect(
+    work.units.some((u: { id: string }) => u.id === yearId || u.id === classId),
+  ).toBe(false);
+  await panel.getByLabel("하위 조직명").fill("4학년");
+  await panel
+    .getByRole("button", { name: "하위 조직 등록", exact: true })
+    .click();
+  await expect(panel.getByRole("status")).toContainText(
+    "삭제했던 하위 조직을 복원했습니다",
+  );
+  await expect(yearRow).toHaveAttribute("data-unit-id", yearId!);
+  await panel.getByLabel("상위 조직").selectOption(yearId!);
+  await expect(
+    panel.locator(`.unit-list li[data-unit-id="${classId}"]`),
+  ).toContainText("C반");
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+});
+
+test("단체별 역할 선택과 담당자 더보기·이름/단체명 검색", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await login(page, "staff-demo");
+  await page.getByRole("button", { name: "조직 · 권한", exact: true }).click();
+  const people = page.locator(".people-panel");
+  const roles = page.locator(".assignments-panel");
+  const search = people.getByLabel("담당자 검색");
+  await expect(
+    people.getByRole("cell", { name: "가상 학생회장", exact: true }),
+  ).toBeVisible();
+  await expect(
+    people.getByRole("cell", { name: "가상 부학회장", exact: true }),
+  ).toHaveCount(0);
+  await people.getByRole("button", { name: /더보기 · 나머지 담당자/ }).click();
+  await expect(
+    people.getByRole("cell", { name: "가상 부학회장", exact: true }),
+  ).toBeVisible();
+  await people
+    .getByRole("button", { name: "접기 · 자치단체장만 보기" })
+    .click();
+  await expect(
+    people.getByRole("cell", { name: "가상 부학회장", exact: true }),
+  ).toHaveCount(0);
+  await search.fill("가상 부학회장");
+  await expect(people.locator("tbody tr")).toHaveCount(1);
+  await expect(
+    people.getByRole("cell", { name: "가상 부학회장", exact: true }),
+  ).toBeVisible();
+  await search.fill(" 학과 협의회 ");
+  await expect(
+    people.getByRole("cell", { name: "가상 부학회장", exact: true }),
+  ).toBeVisible();
+  await expect(
+    people.getByRole("cell", { name: "가상 첫 학회장 후보", exact: true }),
+  ).toBeVisible();
+  await expect(
+    people.getByRole("cell", { name: "가상 학생회장", exact: true }),
+  ).toHaveCount(0);
+  await search.fill("총학생회");
+  await expect(
+    people.getByRole("cell", { name: "가상 첫 학회장 후보", exact: true }),
+  ).toBeVisible();
+  await expect(
+    people.getByRole("cell", { name: "가상 학생회장", exact: true }),
+  ).toBeVisible();
+  await expect(
+    people.getByRole("cell", { name: "가상 부학회장", exact: true }),
+  ).toHaveCount(0);
+  await search.fill("없는단체검색");
+  await expect(people.getByText("검색 결과가 없습니다.")).toBeVisible();
+  await search.fill("");
+  await expect(
+    people.getByRole("cell", { name: "가상 부학회장", exact: true }),
+  ).toHaveCount(0);
+  await expect(roles.locator(".assignment")).toHaveCount(0);
+  await roles
+    .getByRole("button", { name: "총학생회 역할 보기", exact: true })
+    .click();
+  await expect(
+    roles.getByRole("button", { name: "총학생회 역할 보기", exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(
+    roles.locator(".assignment").filter({ hasText: "가상 학생회장" }),
+  ).toBeVisible();
+  await expect(
+    roles.locator(".assignment").filter({ hasText: "가상 부학회장" }),
+  ).toHaveCount(0);
+  await roles
+    .getByRole("button", { name: "학과협의회 역할 보기", exact: true })
+    .click();
+  await expect(
+    roles.locator(".assignment").filter({ hasText: "가상 부학회장" }),
+  ).toBeVisible();
+  await expect(
+    roles.locator(".assignment").filter({ hasText: "가상 학생회장" }),
+  ).toHaveCount(0);
+  await roles
+    .getByRole("button", { name: "모니터링단 역할 보기", exact: true })
+    .click();
+  await expect(
+    roles.getByText("이 단체에 조회 가능한 역할이 없습니다."),
+  ).toBeVisible();
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  await page.getByRole("button", { name: "로그아웃", exact: true }).click();
+  await login(page, "student-rep");
+  await page.getByRole("button", { name: "조직 · 권한", exact: true }).click();
+  await search.fill("가상 학회장");
+  await expect(people.locator("tbody tr")).toHaveCount(0);
+  await expect(people.getByText("검색 결과가 없습니다.")).toBeVisible();
+});
+
+test("학회장의 반 등록 안내와 기존 학년 항목의 반 변경·반대표 부여 연결", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await login(page, "student-head");
+  await page.getByRole("button", { name: "조직 · 권한", exact: true }).click();
+  const structure = page.locator(".structure-management");
+  const grant = page.locator(".grant-panel form");
+  await structure.getByLabel("관리할 단체").selectOption("council");
+  await structure.getByLabel("상위 조직").selectOption("mechanical");
+  await structure.getByLabel("하위 조직명").fill("3SAP");
+  await expect(structure.getByRole("alert")).toContainText(
+    "지금은 학년 등록입니다",
+  );
+  await expect(
+    structure.getByRole("button", { name: "하위 조직 등록", exact: true }),
+  ).toBeDisabled();
+  await structure.getByLabel("하위 조직명").fill("5학년");
+  await structure
+    .getByRole("button", { name: "하위 조직 등록", exact: true })
+    .click();
+  await expect(structure.getByRole("status")).toContainText("현재 항목은 학년");
+  const yearId = await structure
+    .getByLabel("상위 조직")
+    .locator("option")
+    .filter({ hasText: "기계공학과 / 5학년" })
+    .getAttribute("value");
+  await structure.getByLabel("하위 조직명").fill("6학년");
+  await structure
+    .getByRole("button", { name: "하위 조직 등록", exact: true })
+    .click();
+  await expect(structure.getByLabel("하위 조직명")).toHaveValue("");
+  const legacy = structure
+    .locator(".unit-list li")
+    .filter({ hasText: "6학년" });
+  const legacyId = await legacy.getAttribute("data-unit-id");
+  await legacy.getByRole("button", { name: /반으로 변경/ }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByLabel("소속 학년").selectOption(yearId!);
+  await dialog.getByLabel("반 이름").fill("SAP반");
+  await dialog
+    .getByRole("button", { name: "반으로 변경", exact: true })
+    .click();
+  await expect(dialog).not.toBeVisible();
+  await expect(grant.getByLabel("단체", { exact: true })).toHaveValue(
+    "council",
+  );
+  await expect(grant.getByLabel("담당 범위")).toHaveValue(legacyId!);
+  await expect(grant.getByLabel("역할", { exact: true })).toHaveValue(
+    "class_rep",
+  );
+  await expect(
+    grant.getByLabel("역할", { exact: true }).locator("option:checked"),
+  ).toHaveText("5학년 SAP반 반대표");
+  await grant.getByLabel("대상 담당자").selectOption("vice");
+  await grant
+    .getByRole("button", { name: "역할 부여하기", exact: true })
+    .click();
+  await expect(grant.getByRole("status")).toContainText("역할을 등록했습니다");
+  await expect(
+    page.locator(".assignment").filter({ hasText: "5학년 SAP반 반대표" }),
+  ).toContainText("가상 부학회장");
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
 });

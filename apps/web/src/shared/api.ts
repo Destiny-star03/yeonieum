@@ -61,6 +61,7 @@ export type Workspace = {
   can_manage_role_types: boolean;
   unit_creation_options: { parent_id: string; org_id: string; kind: string }[];
   sharing_groups: SharingGroup[];
+  unit_deletion_options: string[];
   scope_kinds: Record<string, string>;
   role_scope_kinds: Record<string, string[]>;
   roles: Record<string, string>;

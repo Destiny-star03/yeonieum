@@ -77,16 +77,17 @@ def active_roles(conn, actor, now):
 
 
 def scope(conn, actor, now):
+    current = {
+        r["id"]
+        for r in conn.execute(
+            "SELECT u.id FROM units u JOIN units o ON o.id=u.org_id WHERE u.active=1 AND o.active=1"
+        )
+    }
     if actor["is_admin"]:
-        return {
-            r["id"]
-            for r in conn.execute(
-                "SELECT u.id FROM units u JOIN units o ON o.id=u.org_id WHERE u.active=1 AND o.active=1"
-            )
-        }
+        return current
     result = set()
     for row in active_roles(conn, actor, now):
-        result.update(descendants(conn, row["unit_id"]))
+        result.update(descendants(conn, row["unit_id"]) & current)
     return result
 
 
@@ -171,3 +172,9 @@ def role_label_for_unit(conn, target, role):
     if role == "class_rep" and target["kind"] == "class" and target["parent_id"]:
         return f"{unit(conn, target['parent_id'])['name']} {target['name']} {label}"
     return label
+
+
+def can_remove_child_unit(conn, actor, target, now):
+    if target["kind"] == "organization" or not target["active"] or not target["parent_id"]:
+        return False
+    return can_create_child_unit(conn, actor, unit(conn, target["parent_id"]), now)

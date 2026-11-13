@@ -44,6 +44,9 @@ const labels: Record<string, string> = {
   "organization.removed": "단체 삭제",
   "organization.restored": "단체 복원",
   "unit.created": "하위 조직 등록",
+  "unit.removed": "하위 조직 삭제",
+  "unit.restored": "하위 조직 복원",
+  "unit.converted-to-class": "반 소속 구조 변경",
   "role_type.created": "역할 종류 추가",
   "role_type.removed": "역할 종류 삭제",
   "role_type.restored": "역할 종류 복원",
@@ -58,6 +61,8 @@ export default function Portal() {
   const [tab, setTab] = useState("overview"),
     [search, setSearch] = useState(""),
     [role, setRole] = useState("");
+  const [showAllPeople, setShowAllPeople] = useState(false);
+  const [assignmentOrgId, setAssignmentOrgId] = useState("");
   const [scopeId, setScopeId] = useState("");
   const [grantOrgId, setGrantOrgId] = useState("");
   const [history, setHistory] = useState<Audit[]>([]),
@@ -122,13 +127,9 @@ export default function Portal() {
   }, []);
   function path(id: string): string {
     const item = workspace?.units.find((u) => u.id === id);
-    return item
-      ? item.parent_id
-        ? `${path(item.parent_id)} / ${item.name}`
-        : item.active
-          ? item.name
-          : `${item.name} (삭제됨)`
-      : id;
+    if (!item) return id;
+    const label = item.active ? item.name : `${item.name} (삭제됨)`;
+    return item.parent_id ? `${path(item.parent_id)} / ${label}` : label;
   }
   async function perform(
     action: () => Promise<unknown>,
@@ -176,6 +177,9 @@ export default function Portal() {
       setError("");
       setNotice("");
       setTab("overview");
+      setSearch("");
+      setShowAllPeople(false);
+      setAssignmentOrgId("");
       setDirect(false);
     } catch (e) {
       setError((e as Error).message);
@@ -220,7 +224,14 @@ export default function Portal() {
           election_note: role === "chair" ? data.get("election_note") : "",
         }),
       "역할을 등록했습니다. 기간과 담당 범위를 확인해 주세요.",
-      (message, error) => setGrantFeedback({ message, error }),
+      (message, error) => {
+        setGrantFeedback({ message, error });
+        if (!error) {
+          setAssignmentOrgId(
+            workspace?.units.find((u) => u.id === scopeId)?.org_id || "",
+          );
+        }
+      },
     );
   }
   async function register(e: FormEvent<HTMLFormElement>) {
@@ -240,6 +251,8 @@ export default function Portal() {
         const result = await api<{ restored: boolean }>("/users", data);
         restored = result.restored;
         registration.current?.close();
+        setSearch("");
+        setShowAllPeople(true);
       },
       () =>
         restored
@@ -368,7 +381,24 @@ export default function Portal() {
   const own = workspace.assignments.filter(
     (a) => a.user_id === user.id && a.effective,
   );
-  const people = workspace.users.filter((p) => p.name.includes(search));
+  const normalizeSearch = (value: string) =>
+    value.replace(/\s+/g, "").toLocaleLowerCase();
+  const query = normalizeSearch(search);
+  const leaderIds = new Set(workspace.contacts.map((p) => p.id));
+  const people = workspace.users.filter(
+    (p) =>
+      !query ||
+      [
+        p.name,
+        ...(p.unit_ids || []).map(path),
+        ...workspace.assignments
+          .filter((a) => a.user_id === p.id && !a.revoked_at)
+          .map((a) => path(a.unit_id)),
+      ].some((value) => normalizeSearch(value).includes(query)),
+  );
+  const visiblePeople =
+    query || showAllPeople ? people : people.filter((p) => leaderIds.has(p.id));
+  const hiddenPeopleCount = people.length - visiblePeople.length;
   const roleUnits = workspace.units.filter(
     (u) =>
       Boolean(u.active) &&
@@ -397,6 +427,19 @@ export default function Portal() {
           (parent) => parent.id === a.prerequisite_id && !parent.revoked_at,
         )),
   );
+  const assignmentOrganizations = workspace.units.filter(
+    (u) => u.kind === "organization" && Boolean(u.active),
+  );
+  const selectedAssignmentOrg = assignmentOrganizations.find(
+    (u) => u.id === assignmentOrgId,
+  );
+  const visibleAssignments = selectedAssignmentOrg
+    ? listedAssignments.filter(
+        (a) =>
+          workspace.units.find((u) => u.id === a.unit_id)?.org_id ===
+          selectedAssignmentOrg.id,
+      )
+    : [];
   const canAudit = Boolean(
     user.is_admin || own.some((a) => ["head", "chair"].includes(a.role)),
   );
@@ -543,16 +586,25 @@ export default function Portal() {
                 <StructureManagement
                   workspace={workspace}
                   onChanged={refresh}
+                  onClassReady={(id) => {
+                    setGrantOrgId("council");
+                    setScopeId(id);
+                    setRole("class_rep");
+                    setRecipientId("");
+                    setGrantFeedback(null);
+                  }}
                 />
               )}
-              <div className="panel">
+              <div className="panel people-panel">
                 <div className="section-heading">
                   <div>
                     <h2>
                       담당자 목록 <span className="count">{people.length}</span>
                     </h2>
                     <p className="muted">
-                      연락처와 학번은 허용된 관리 범위에서만 표시됩니다.
+                      자치단체장부터 표시합니다. 더보기로 나머지 담당자를
+                      확인하세요. 연락처와 학번은 허용된 관리 범위에서만
+                      표시됩니다.
                     </p>
                   </div>
                   <button
@@ -566,12 +618,15 @@ export default function Portal() {
                 <label className="search">
                   담당자 검색
                   <input
-                    placeholder="이름으로 검색"
+                    placeholder="이름 또는 단체명으로 검색"
                     value={search}
-                    onChange={(e) => setSearch(e.target.value)}
+                    onChange={(e) => {
+                      setSearch(e.target.value);
+                      setShowAllPeople(false);
+                    }}
                   />
                 </label>
-                <div className="table-scroll">
+                <div className="table-scroll" id="people-list">
                   <table>
                     <thead>
                       <tr>
@@ -582,7 +637,7 @@ export default function Portal() {
                       </tr>
                     </thead>
                     <tbody>
-                      {people.map((p) => (
+                      {visiblePeople.map((p) => (
                         <tr key={p.id}>
                           <td>
                             <strong>{p.name}</strong>
@@ -626,25 +681,76 @@ export default function Portal() {
                       ))}
                     </tbody>
                   </table>
-                  {!people.length && (
-                    <p className="empty">검색 결과가 없습니다.</p>
+                  {!visiblePeople.length && (
+                    <p className="empty">
+                      {query
+                        ? "검색 결과가 없습니다."
+                        : "표시할 자치단체장이 없습니다. 더보기로 나머지 담당자를 확인하세요."}
+                    </p>
                   )}
                 </div>
+                {!query && (hiddenPeopleCount > 0 || showAllPeople) && (
+                  <button
+                    type="button"
+                    className="people-more"
+                    aria-expanded={showAllPeople}
+                    aria-controls="people-list"
+                    onClick={() => setShowAllPeople(!showAllPeople)}
+                  >
+                    {showAllPeople
+                      ? "접기 · 자치단체장만 보기"
+                      : `더보기 · 나머지 담당자 ${hiddenPeopleCount}명`}
+                  </button>
+                )}
               </div>
               <AcademicGroups groups={workspace.sharing_groups} />
               {registerUnits.length > 0 && (
                 <InvitationOutbox workspace={workspace} onChanged={refresh} />
               )}
               <div className="two-columns roles-layout">
-                <section className="panel">
+                <section className="panel assignments-panel">
                   <h2>역할과 임기</h2>
                   <p className="muted">
                     계정별 업무 권한·담당 범위·유효기간을 관리합니다. 역할
                     회수는 계정을 제거하지 않습니다. 회수된 역할은 이 목록에서
                     숨기며 활동 이력은 보존합니다.
                   </p>
+                  <div
+                    className="assignment-organizations"
+                    role="group"
+                    aria-label="역할과 임기 단체 선택"
+                  >
+                    {assignmentOrganizations.map((org) => {
+                      const count = new Set(
+                        listedAssignments
+                          .filter(
+                            (a) =>
+                              workspace.units.find((u) => u.id === a.unit_id)
+                                ?.org_id === org.id,
+                          )
+                          .map((a) => a.user_id),
+                      ).size;
+                      return (
+                        <button
+                          type="button"
+                          key={org.id}
+                          aria-label={`${org.name} 역할 보기`}
+                          aria-pressed={selectedAssignmentOrg?.id === org.id}
+                          onClick={() => setAssignmentOrgId(org.id)}
+                        >
+                          <strong>{org.name}</strong>
+                          <span>{count}명</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {selectedAssignmentOrg && (
+                    <h3 className="assignment-group-heading">
+                      {selectedAssignmentOrg.name} 담당자
+                    </h3>
+                  )}
                   <div className="assignment-list">
-                    {listedAssignments.map((a) => (
+                    {visibleAssignments.map((a) => (
                       <article key={a.id} className="assignment">
                         <div>
                           <span
@@ -700,8 +806,12 @@ export default function Portal() {
                       </article>
                     ))}
                   </div>
-                  {!listedAssignments.length && (
-                    <p className="empty">조회 가능한 역할이 없습니다.</p>
+                  {!visibleAssignments.length && (
+                    <p className="empty">
+                      {selectedAssignmentOrg
+                        ? "이 단체에 조회 가능한 역할이 없습니다."
+                        : "단체를 선택하면 해당 담당자의 역할과 임기가 표시됩니다."}
+                    </p>
                   )}
                 </section>
                 <section className="panel grant-panel">

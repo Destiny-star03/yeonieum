@@ -973,3 +973,304 @@ def test_vice_and_custom_named_roles_do_not_gain_academic_management_or_audience
     login(c, "student-new")
     work = c.get("/api/workspace").json()
     assert work["sharing_groups"] == [] and work["unit_creation_options"] == []
+
+
+def test_subunit_delete_revokes_current_future_roles_and_restore_keeps_history(setup):
+    c, path, clock, app = setup
+    login(c)
+    sibling = new_unit(c, "student", "office", "홍보부")
+    person = c.post("/api/users", json=account("20263001", "student")).json()["id"]
+    accept_latest(c, person)
+    assert c.post("/api/assignments", json=payload(person, "student-office", "manager")).status_code == 201
+    year = clock[0].year
+    assert (
+        c.post(
+            "/api/assignments",
+            json=payload(
+                person,
+                "student-office",
+                "deputy",
+                starts_at=f"{year + 1}-01-01T00:00:00+00:00",
+                ends_at=f"{year + 2}-01-01T00:00:00+00:00",
+            ),
+        ).status_code
+        == 201
+    )
+    assert c.post("/api/units/student-office/remove", json={"confirmed": False}).status_code == 422
+    with TestClient(app, headers=ORIGIN) as officer:
+        login(officer, "20263001")
+        removed = c.post("/api/units/student-office/remove", json={"confirmed": True})
+        assert removed.status_code == 200 and removed.json()["revoked_count"] == 2
+        assert officer.get("/api/me").status_code == 200
+        assert officer.get("/api/me").json()["assignments"] == []
+    work = c.get("/api/workspace").json()
+    assert any(p["id"] == person for p in work["users"])
+    assert all(a["revoked_at"] and not a["effective"] for a in work["assignments"] if a["user_id"] == person)
+    assert any(u["id"] == sibling and u["active"] for u in work["units"])
+    assert c.post("/api/assignments", json=payload(person, "student-office", "manager")).status_code == 403
+    assert c.post("/api/users", json=account("20263002", "student-office")).status_code == 403
+    login(c, "student-other")
+    assert not any(u["id"] == "student-office" for u in c.get("/api/workspace").json()["units"])
+    login(c)
+    restored = c.post("/api/units", json={"parent_id": "student", "kind": "office", "name": " 기획부 "})
+    assert (
+        restored.status_code == 200
+        and restored.json()["id"] == "student-office"
+        and restored.json()["restored"]
+    )
+    assert all(
+        a["revoked_at"] for a in c.get("/api/workspace").json()["assignments"] if a["user_id"] == person
+    )
+    conn = connect(path)
+    assert conn.execute("SELECT count(*) FROM memberships WHERE user_id=?", (person,)).fetchone()[0] == 1
+    conn.close()
+
+
+def test_department_head_can_delete_own_year_subtree_but_not_department_or_other_scope(setup):
+    c, _, _, _ = setup
+    login(c, "student-head")
+    year = new_unit(c, "mechanical", "year", "3학년")
+    group = new_unit(c, year, "class", "A반")
+    person = c.post("/api/users", json=account("20263003", group)).json()["id"]
+    accept_latest(c, person)
+    assert c.post("/api/assignments", json=payload(person, group, "class_rep")).status_code == 201
+    options = c.get("/api/workspace").json()["unit_deletion_options"]
+    assert (
+        year in options and group in options and "mechanical" not in options and "software-1-A" not in options
+    )
+    assert c.post("/api/units/mechanical/remove", json={"confirmed": True}).status_code == 403
+    assert c.post("/api/units/software-1-A/remove", json={"confirmed": True}).status_code == 403
+    response = c.post(f"/api/units/{year}/remove", json={"confirmed": True})
+    assert response.status_code == 200 and response.json()["unit_count"] == 2
+    work = c.get("/api/workspace").json()
+    assert not any(u["id"] in {year, group} for u in work["units"])
+    assert not any(m["user_id"] == person for g in work["sharing_groups"] for m in g["members"])
+    assert any(a["id"] == "head-role" and a["effective"] for a in work["assignments"])
+    login(c, "student-vice")
+    assert c.get("/api/workspace").json()["unit_deletion_options"] == []
+    assert c.post("/api/units/software-1-A/remove", json={"confirmed": True}).status_code == 403
+
+
+def test_deleting_department_ends_chair_dependency_without_deleting_accounts(setup):
+    c, _, _, _ = setup
+    login(c)
+    assert c.post("/api/units/council/remove", json={"confirmed": True}).status_code == 422
+    removed = c.post("/api/units/software/remove", json={"confirmed": True})
+    assert removed.status_code == 200 and removed.json()["revoked_count"] == 4
+    work = c.get("/api/workspace").json()
+    assert all(
+        a["revoked_at"] and not a["effective"]
+        for a in work["assignments"]
+        if a["id"] in {"chair-dept", "chair-role", "vice-role", "rep-role"}
+    )
+    assert any(a["id"] == "head-role" and a["effective"] for a in work["assignments"])
+    assert {"chair", "vice", "rep"} <= {p["id"] for p in work["users"]}
+    assert not any(g["key"] == "department:software" for g in work["sharing_groups"])
+    assert "role.dependency-ended" in {a["action"] for a in c.get("/api/audit").json()}
+    restored = c.post(
+        "/api/units", json={"parent_id": "council", "kind": "department", "name": "스마트소프트웨어학과"}
+    )
+    assert restored.status_code == 200 and restored.json()["id"] == "software"
+    assert all(
+        not a["effective"]
+        for a in c.get("/api/workspace").json()["assignments"]
+        if a["id"] in {"chair-dept", "chair-role", "vice-role", "rep-role"}
+    )
+
+
+def test_parent_and_organization_restores_do_not_revive_independently_deleted_branch(setup):
+    c, path, clock, _ = setup
+    login(c)
+    year = new_unit(c, "mechanical", "year", "3학년")
+    a = new_unit(c, year, "class", "A반")
+    b = new_unit(c, year, "class", "B반")
+    assert c.post(f"/api/units/{a}/remove", json={"confirmed": True}).status_code == 200
+    assert c.post(f"/api/units/{year}/remove", json={"confirmed": True}).status_code == 200
+    restored = c.post("/api/units", json={"parent_id": "mechanical", "kind": "year", "name": "3학년"})
+    assert restored.status_code == 200 and restored.json()["id"] == year
+    units = {u["id"]: u for u in c.get("/api/workspace").json()["units"]}
+    assert units[year]["active"] and units[b]["active"] and not units[a]["active"]
+    assert (
+        c.post("/api/organizations/council/remove", json={"confirmation": "삭제하겠습니다"}).status_code
+        == 200
+    )
+    assert c.post("/api/organizations", json={"name": "학과협의회"}).status_code == 200
+    with TestClient(create_app(path, lambda: clock[0]), headers=ORIGIN) as reopened:
+        login(reopened)
+        units = {u["id"]: u for u in reopened.get("/api/workspace").json()["units"]}
+        assert units[year]["active"] and units[b]["active"] and not units[a]["active"]
+        revived = reopened.post("/api/units", json={"parent_id": year, "kind": "class", "name": "A반"})
+        assert revived.status_code == 200 and revived.json()["id"] == a
+
+
+def test_legacy_inactive_organization_migrates_deletion_batch(tmp_path):
+    import sqlite3
+
+    from yeonieum.core.database import SCHEMA
+    from yeonieum.modules.organizations.lifecycle import restore_subtree
+
+    path = tmp_path / "legacy-deleted.sqlite3"
+    old = sqlite3.connect(path)
+    old.executescript(SCHEMA)
+    old.execute("ALTER TABLE units ADD COLUMN active INTEGER NOT NULL DEFAULT 1")
+    old.execute(
+        "INSERT INTO units (id,org_id,parent_id,kind,name,active) VALUES ('legacy','legacy',NULL,'organization','기존 단체',0)"
+    )
+    old.execute(
+        "INSERT INTO units (id,org_id,parent_id,kind,name,active) VALUES ('office','legacy','legacy','office','기존 부서',0)"
+    )
+    old.commit()
+    old.close()
+    migrated = connect(path)
+    assert {r[0] for r in migrated.execute("SELECT deletion_root_id FROM units")} == {"legacy"}
+    assert restore_subtree(migrated, "legacy") == 2
+    assert all(r[0] for r in migrated.execute("SELECT active FROM units"))
+    migrated.close()
+
+
+@pytest.mark.parametrize(
+    "body",
+    [{}, {"confirmed": False}, {"confirmed": "true"}, {"confirmed": 1}, {"confirmation": "삭제하겠습니다"}],
+)
+def test_subunit_deletion_requires_explicit_boolean_confirmation(setup, body):
+    c, path, _, _ = setup
+    login(c)
+    assert c.post("/api/units/student-office/remove", json=body).status_code == 422
+    conn = connect(path)
+    assert conn.execute("SELECT active FROM units WHERE id='student-office'").fetchone()[0] == 1
+    assert conn.execute("SELECT count(*) FROM audit").fetchone()[0] == 0
+    conn.close()
+
+
+def legacy_year(path, department="software", name="3SAP"):
+    conn = connect(path)
+    try:
+        conn.execute(
+            "INSERT INTO units (id,org_id,parent_id,kind,name) VALUES ('legacy-class','council',?,'year',?)",
+            (department, name),
+        )
+    finally:
+        conn.close()
+    return "legacy-class"
+
+
+@pytest.mark.parametrize("actor,department", [("student-chair", "software"), ("student-head", "mechanical")])
+def test_convert_legacy_year_to_class_preserves_identity_and_exposes_grant(setup, actor, department):
+    c, path, clock, app = setup
+    legacy = legacy_year(path, department)
+    login(c, actor)
+    created = c.post("/api/units", json={"parent_id": department, "kind": "year", "name": "3학년"})
+    assert created.status_code == 201
+    parent = created.json()["id"]
+    assert not any(o["unit_id"] == legacy for o in c.get("/api/workspace").json()["grant_options"])
+    conn = connect(path)
+    conn.execute("INSERT INTO memberships VALUES ('member',?)", (legacy,))
+    assignments = conn.execute("SELECT COUNT(*) FROM assignments").fetchone()[0]
+    conn.close()
+    changed = c.post(f"/api/units/{legacy}/convert-to-class", json={"parent_id": parent, "name": "SAP반"})
+    assert changed.status_code == 200 and changed.json()["id"] == legacy
+    work = c.get("/api/workspace").json()
+    target = next(u for u in work["units"] if u["id"] == legacy)
+    assert (target["kind"], target["parent_id"], target["name"]) == ("class", parent, "SAP반")
+    assert any(o["unit_id"] == legacy and o["role"] == "class_rep" for o in work["grant_options"])
+    conn = connect(path)
+    assert conn.execute(
+        "SELECT 1 FROM memberships WHERE user_id='member' AND unit_id=?", (legacy,)
+    ).fetchone()
+    assert conn.execute("SELECT COUNT(*) FROM assignments").fetchone()[0] == assignments
+    assert (
+        conn.execute("SELECT COUNT(*) FROM audit WHERE action='unit.converted-to-class'").fetchone()[0] == 1
+    )
+    conn.close()
+    assert c.post("/api/assignments", json=payload(home=legacy)).status_code == 201
+    assert any(
+        a["unit_id"] == legacy and a["role_label"] == "3학년 SAP반 반대표"
+        for a in c.get("/api/workspace").json()["assignments"]
+    )
+
+
+@pytest.mark.parametrize(
+    "actor,parent,status",
+    [
+        ("student-head", "software-1", 403),
+        ("student-vice", "software-1", 403),
+        ("student-rep", "software-1", 403),
+        ("staff-demo", "mechanical-1", 422),
+        ("student-chair", "software", 422),
+    ],
+)
+def test_class_conversion_rejects_out_of_scope_or_wrong_parent(setup, actor, parent, status):
+    c, path, clock, app = setup
+    legacy = legacy_year(path)
+    login(c, actor)
+    assert (
+        c.post(
+            f"/api/units/{legacy}/convert-to-class", json={"parent_id": parent, "name": "SAP반"}
+        ).status_code
+        == status
+    )
+    conn = connect(path)
+    assert tuple(conn.execute("SELECT kind,parent_id FROM units WHERE id=?", (legacy,)).fetchone()) == (
+        "year",
+        "software",
+    )
+    assert (
+        conn.execute("SELECT COUNT(*) FROM audit WHERE action='unit.converted-to-class'").fetchone()[0] == 0
+    )
+    conn.close()
+
+
+@pytest.mark.parametrize("history", ["child", "revoked_role"])
+def test_class_conversion_does_not_reinterpret_existing_history(setup, history):
+    c, path, clock, app = setup
+    legacy = legacy_year(path)
+    login(c)
+    if history == "child":
+        conn = connect(path)
+        conn.execute(
+            "INSERT INTO units (id,org_id,parent_id,kind,name,active) VALUES ('old-child','council',?,'class','과거 반',0)",
+            (legacy,),
+        )
+        conn.close()
+    else:
+        role = c.post(
+            "/api/role-types", json={"org_id": "council", "label": "학년 담당", "scope_kind": "year"}
+        ).json()["code"]
+        grant = c.post("/api/assignments", json=payload(home=legacy, role=role))
+        assert grant.status_code == 201
+        assert (
+            c.post(
+                f"/api/assignments/{grant.json()['id']}/revoke", json={"reason": "테스트 회수"}
+            ).status_code
+            == 200
+        )
+    assert (
+        c.post(
+            f"/api/units/{legacy}/convert-to-class", json={"parent_id": "software-1", "name": "SAP반"}
+        ).status_code
+        == 409
+    )
+
+
+@pytest.mark.parametrize("deleted", [False, True])
+def test_class_conversion_keeps_existing_or_deleted_class_identity(setup, deleted):
+    c, path, clock, app = setup
+    legacy = legacy_year(path)
+    login(c)
+    if deleted:
+        assert c.post("/api/units/software-1-A/remove", json={"confirmed": True}).status_code == 200
+    assert (
+        c.post(
+            f"/api/units/{legacy}/convert-to-class", json={"parent_id": "software-1", "name": "A반"}
+        ).status_code
+        == 409
+    )
+
+
+@pytest.mark.parametrize("name", ["1A", "3SAP", "2B반"])
+def test_class_names_cannot_be_registered_as_years(setup, name):
+    c, path, clock, app = setup
+    login(c, "student-chair")
+    response = c.post("/api/units", json={"parent_id": "software", "kind": "year", "name": name})
+    assert response.status_code == 422
+    assert "학년으로 등록할 수 없습니다" in response.json()["detail"]
