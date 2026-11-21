@@ -7,9 +7,10 @@ test("의장 겸임 확인, 하위 역할 부여, 새로고침 후 기록 유지
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(e.message));
   await login(page, "student-chair");
-  await expect(
-    page.getByText("학회장들의 투표로 선출 · 자기 학과 학회장과 동일 임기"),
-  ).toBeVisible();
+  await expect(page.locator(".workspace-account")).toHaveAttribute(
+    "title",
+    /의장.*학회장|학회장.*의장/,
+  );
   await mkdir("../../local-data/preview", { recursive: true });
   await page.screenshot({
     path: "../../local-data/preview/desktop.png",
