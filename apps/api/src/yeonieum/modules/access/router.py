@@ -468,3 +468,4 @@ def install_routes(app, database, now):
     install_organization_routes(app, db, actor, now)
     install_invitation_routes(app, db, actor, now)
     install_role_routes(app, db, actor, now)
+    return db, actor

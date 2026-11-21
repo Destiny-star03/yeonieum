@@ -11,6 +11,8 @@ def deactivate_subtree(conn, actor, root_id, now):
     # restore cannot accidentally bring them back.
     changed = 0
     for ident in subtree:
+        conn.execute("UPDATE document_staff_scopes SET active=0 WHERE unit_id=?", (ident,))
+        conn.execute("UPDATE finance_grants SET active=0 WHERE org_id=?", (ident,))
         changed += conn.execute(
             "UPDATE units SET active=0,deletion_root_id=? WHERE id=? AND active=1", (root_id, ident)
         ).rowcount

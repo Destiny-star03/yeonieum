@@ -9,6 +9,7 @@ from fastapi import Depends, HTTPException
 from pydantic import Field
 
 from yeonieum.core.database import audit, stamp, transaction
+from yeonieum.core.local import web_origin
 from yeonieum.modules.access.policy import can_register, deny, unit
 from yeonieum.modules.access.schemas import StrictModel
 
@@ -36,7 +37,7 @@ def issue_invitation(conn, actor, user_id, now):
     )
     # A local mail preview necessarily holds the link just as a delivered email would.
     # It is never returned by the public account/workspace APIs or written to logs.
-    conn.execute("INSERT INTO local_outbox VALUES (?,?)", (ident, f"http://127.0.0.1:5173/#invite={token}"))
+    conn.execute("INSERT INTO local_outbox VALUES (?,?)", (ident, f"{web_origin()}/#invite={token}"))
     return ident
 
 

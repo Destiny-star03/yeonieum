@@ -6,6 +6,11 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from uuid import uuid4
 
+from yeonieum.modules.budgets.schema import SCHEMA as BUDGET_SCHEMA
+from yeonieum.modules.calendar.schema import SCHEMA as CALENDAR_SCHEMA
+from yeonieum.modules.documents.schema import SCHEMA as DOCUMENT_SCHEMA
+from yeonieum.modules.handovers.schema import SCHEMA as HANDOVER_SCHEMA
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
  id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT NOT NULL UNIQUE,
@@ -54,7 +59,11 @@ def connect(path):
     conn = sqlite3.connect(path, isolation_level=None, check_same_thread=False, timeout=10)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys=ON")
-    conn.executescript(SCHEMA)
+    conn.executescript(SCHEMA + DOCUMENT_SCHEMA + BUDGET_SCHEMA + HANDOVER_SCHEMA + CALENDAR_SCHEMA)
+    if "folder_id" not in {r[1] for r in conn.execute("PRAGMA table_info(documents)")}:
+        conn.execute("ALTER TABLE documents ADD COLUMN folder_id TEXT REFERENCES document_folders(id)")
+    if "details" not in {r[1] for r in conn.execute("PRAGMA table_info(calendar_events)")}:
+        conn.execute("ALTER TABLE calendar_events ADD COLUMN details TEXT NOT NULL DEFAULT '{}' ")
     if "active" not in {r[1] for r in conn.execute("PRAGMA table_info(units)")}:
         conn.execute("ALTER TABLE units ADD COLUMN active INTEGER NOT NULL DEFAULT 1")
     if "deletion_root_id" not in {r[1] for r in conn.execute("PRAGMA table_info(units)")}:
@@ -63,6 +72,11 @@ def connect(path):
         conn.execute("UPDATE units SET deletion_root_id=org_id WHERE active=0")
     if "email_verified" not in {r[1] for r in conn.execute("PRAGMA table_info(users)")}:
         conn.execute("ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 1")
+    if "request_id" not in {r[1] for r in conn.execute("PRAGMA table_info(expenses)")}:
+        conn.execute("ALTER TABLE expenses ADD COLUMN request_id TEXT")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS expense_request_once ON expenses(created_by,request_id) WHERE request_id IS NOT NULL"
+    )
     return conn
 
 
