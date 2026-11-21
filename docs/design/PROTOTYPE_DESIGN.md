@@ -1,5 +1,7 @@
 # 1차 상세 설계와 프로토타입 경계
 
+2026-11-16: 일반 자료실의 로컬 구현은 [DOCUMENT_LIBRARY.md](DOCUMENT_LIBRARY.md), 예산·민감 증빙·정산·인수인계의 로컬 구현은 [LOCAL_FINANCE_HANDOVER.md](LOCAL_FINANCE_HANDOVER.md)를 따른다. 아래의 과거 논리 모델 설명 중 해당 로컬 기능은 구현됐으며 마감 운영기·AWS·확정 후 정정은 후속이다.
+
 2026-11-12. [도메인 모델](../DOMAIN_MODEL.md), [기능명세](../FUNCTIONAL_SPEC.md), [권한 명세](../ACCESS_CONTROL.md)를 기준으로 한다. 구현 범위는 M-01~03 및 역할 회수·감사 부분이다. 자료·회계·인수인계는 아래 논리 설계 단계이며 실행 코드가 있다고 해석하지 않는다.
 
 ## 구현된 데이터 관계

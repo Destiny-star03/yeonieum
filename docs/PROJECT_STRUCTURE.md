@@ -44,11 +44,13 @@ yeonieum/
 
 ## 기능별 배치 지도
 
+예산의 Excel/CSV 제한 파서는 `apps/api/src/yeonieum/modules/budgets/spending_preview.py`, 지출·증빙 등록창은 `apps/web/src/features/budgets/ExpenseDialog.tsx`에 둔다. 기존 `documents/FileDropzone`의 파일 선택 UI를 재사용하고 회계 인가·금액 확인·민감 증빙 저장은 budgets 안에서 처리한다. 자료실 소유권이나 공개 범위를 증빙 권한에 재사용하지 않는다.
+
 | 기능 이름 | 책임 | 요구 연결 |
 |---|---|---|
 | access | 사용자·초대·소속 역할·범위·유효기간 판정 | M-01~03, F-01/02, AUTH |
 | organizations | 단체·학과·반·부서·동아리 단위와 학년도 분류 | M-03, F-02 |
-| documents | 자료·파일 메타데이터·버전·검색·휴지통 | M-04~06, F-03/04/10 |
+| documents | 연도·단체·폴더·개인/단체 공유, 파일 메타데이터·버전·검색·휴지통 | M-04~06, F-03/04/10 |
 | budgets | 연간·행사 예산·지출·증빙 참조·확인·정산·정정 | M-07~09, F-05/06 |
 | handovers | 인계·인수 목록·필수 확인·권한 교체 절차 | M-10/11, F-07 |
 | knowledge | 승인 자료 기반 RAG와 근거·권한·반영 상태 | 핵심 완료 후의 AI 확장 |

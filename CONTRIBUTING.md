@@ -8,7 +8,7 @@
 
 ## 처음 시작하기
 
-현재는 문서와 시작 디렉터리, 공통 검사 설정만 있다. 웹·API 실행, 앱 빌드·테스트 명령은 실제 코드와 도구가 추가될 때 각 앱 README에 검증 후 기록한다.
+현재 조직·권한, 일반 자료실, 예산·인수인계의 React/FastAPI 로컬 앱이 있다. 실행·시연은 [프로토타입 가이드](docs/PROTOTYPE.md), 자료실의 P 권한·백업·파일 검증 범위는 [자료실 계약](docs/design/DOCUMENT_LIBRARY.md), 회계·인수인계의 P 범위는 [별도 계약](docs/design/LOCAL_FINANCE_HANDOVER.md)을 따른다. E2E는 고유 DB와 파일 폴더·별도 포트를 사용한다.
 
 Git 저장소를 clone한 뒤 공통 검사 환경을 만든다. Windows PowerShell 예시:
 
