@@ -1,4 +1,8 @@
+import WorkspaceShell from "../workspace/WorkspaceShell";
 import AcademicGroups from "./AcademicGroups";
+import DocumentLibrary from "../documents/DocumentLibrary";
+import BudgetWorkspace from "../budgets/BudgetWorkspace";
+import HandoverWorkspace from "../handovers/HandoverWorkspace";
 import AcademicChairControls from "./AcademicChairControls";
 import ChairDesignationDialog from "./ChairDesignationDialog";
 import {
@@ -43,6 +47,9 @@ const labels: Record<string, string> = {
   "organization.created": "단체 추가",
   "organization.removed": "단체 삭제",
   "organization.restored": "단체 복원",
+  "calendar.created": "일정 등록",
+  "calendar.updated": "일정 수정",
+  "calendar.removed": "일정 삭제",
   "unit.created": "하위 조직 등록",
   "unit.removed": "하위 조직 삭제",
   "unit.restored": "하위 조직 복원",
@@ -50,6 +57,27 @@ const labels: Record<string, string> = {
   "role_type.created": "역할 종류 추가",
   "role_type.removed": "역할 종류 삭제",
   "role_type.restored": "역할 종류 복원",
+  "document.version-added": "자료 파일·버전 등록",
+  "document.metadata-updated": "자료 분류·공유 변경",
+  "document.trashed": "자료 휴지통 이동",
+  "document.restored": "자료 복원",
+  "document.version-restored": "자료 과거 버전 복원",
+  "document.download-authorized": "자료 다운로드 허용",
+  "document.staff-scope-changed": "선생님 자료 관리 범위 변경",
+  "finance.grant-changed": "회계 업무 권한 변경",
+  "finance.annual-changed": "연간 예산 변경",
+  "finance.event-changed": "행사 배정 변경",
+  "finance.expense-created": "실제 지출 기록",
+  "finance.expense-corrected": "지출 정정",
+  "finance.expense-reviewed": "개별 지출 검토",
+  "finance.exception-reviewed": "초과분 처리",
+  "finance.evidence-added": "민감 증빙 등록",
+  "finance.evidence-download-authorized": "민감 증빙 다운로드 허용",
+  "finance.settled": "전체 정산 확정",
+  "handover.created": "인수인계 생성",
+  "handover.item-added": "인계 항목 추가",
+  "handover.item-checked": "인수 확인",
+  "handover.completed": "인수인계 완료",
 };
 export default function Portal() {
   const [direct, setDirect] = useState(false);
@@ -444,615 +472,560 @@ export default function Portal() {
     user.is_admin || own.some((a) => ["head", "chair"].includes(a.role)),
   );
   return (
-    <div className="app-shell">
-      <aside className="sidebar">
-        <a
-          className="brand"
-          href="#"
-          onClick={(e) => {
-            e.preventDefault();
-            setTab("overview");
-          }}
-        >
-          <Brand />
-        </a>
-        <div className="workspace-label">WORKSPACE</div>
-        <nav aria-label="주 메뉴">
-          <button
-            aria-label="대시보드"
-            className={tab === "overview" ? "active" : ""}
-            onClick={() => setTab("overview")}
-          >
-            ◫ <span>대시보드</span>
-          </button>
-          <button
-            aria-label="조직 · 권한"
-            className={tab === "roles" ? "active" : ""}
-            onClick={() => setTab("roles")}
-          >
-            ♧ <span>조직 · 권한</span>
-          </button>
-          <button
-            aria-label="활동 이력"
-            className={tab === "activity" ? "active" : ""}
-            onClick={activity}
-            disabled={!canAudit}
-          >
-            ↗ <span>활동 이력</span>
-          </button>
-        </nav>
-        <div className="workspace-label upcoming">NEXT CHAPTER</div>
-        <div className="future-list">
-          <span>
-            자료실 <small>준비 중</small>
-          </span>
-          <span>
-            예산 · 지출 <small>설계 완료 후 구현</small>
-          </span>
-          <span>
-            인수인계 <small>설계 완료 후 구현</small>
-          </span>
-        </div>
-        <div className="sidebar-bottom">
-          <span className="avatar">{user.name.slice(0, 1)}</span>
+    <WorkspaceShell
+      workspace={workspace}
+      user={user}
+      tab={tab}
+      canAudit={canAudit}
+      onNavigate={setTab}
+      onActivity={() => void activity()}
+      onLogout={() => void logout()}
+    >
+      <main className="content">
+        <div className="page-heading">
           <div>
-            <strong>{user.name}</strong>
-            <small>
-              {user.is_admin
-                ? "학생성공센터 · 관리자"
-                : own
-                    .map((a) => a.role_label || workspace.roles[a.role])
-                    .join(" · ") || "역할 미부여"}
-            </small>
+            <p className="eyebrow">
+              {tab === "overview"
+                ? "YOUR CONNECTED WORKSPACE"
+                : tab === "roles"
+                  ? "PEOPLE & RESPONSIBILITIES"
+                  : tab === "documents"
+                    ? "RECORDS & CONTINUITY"
+                    : tab === "budgets"
+                      ? "BUDGET & SETTLEMENT"
+                      : tab === "handovers"
+                        ? "HANDOVER & CONTINUITY"
+                        : "ACTIVITY LOG"}
+            </p>
+            <h1>
+              {tab === "overview"
+                ? "대시보드"
+                : tab === "roles"
+                  ? "조직과 담당자 관리"
+                  : tab === "documents"
+                    ? "자료실"
+                    : tab === "budgets"
+                      ? "예산과 정산"
+                      : tab === "handovers"
+                        ? "인수인계"
+                        : "업무의 흐름을 기록합니다"}
+            </h1>
+            <p className="muted">
+              {tab === "overview"
+                ? `${user.name}님, 오늘의 일정을 살펴보고 필요한 업무를 시작하세요.`
+                : tab === "roles"
+                  ? "직책과 담당 범위, 임기를 함께 확인하고 권한을 부여합니다."
+                  : tab === "documents"
+                    ? "활동의 기록을 보관하고 다음 담당자에게 이어줍니다."
+                    : tab === "budgets"
+                      ? "단체별 연간 예산과 실제 지출·검토·정산을 확인합니다."
+                      : tab === "handovers"
+                        ? "자료와 업무를 다음 담당자에게 전달하고 인수 확인을 남깁니다."
+                        : "역할 변경의 주체와 시각을 확인하세요."}
+            </p>
           </div>
-          <button onClick={logout} aria-label="로그아웃">
-            ↪
-          </button>
+          <div className="date-label">
+            {date(workspace.server_time)}
+            <small>현재 서버 시각 기준</small>
+          </div>
         </div>
-      </aside>
-      <div className="main-column">
-        <header className="topbar">
-          <span className="school-identity">
-            <img
-              src="/brand/university-symbol.png"
-              alt=""
-              width="30"
-              height="30"
-            />
-            연암공과대학교 <span className="divider">/</span> 학생자치기구
-          </span>
-          <span className="pill">가상 데이터 · 로컬 시연</span>
-          <button className="mobile-signout" onClick={logout}>
-            로그아웃
-          </button>
-        </header>
-        <main className="content">
-          <div className="page-heading">
-            <div>
-              <p className="eyebrow">
-                {tab === "overview"
-                  ? "YOUR CONNECTED WORKSPACE"
-                  : tab === "roles"
-                    ? "PEOPLE & RESPONSIBILITIES"
-                    : "ACTIVITY LOG"}
-              </p>
-              <h1>
-                {tab === "overview"
-                  ? "대시보드"
-                  : tab === "roles"
-                    ? "조직과 담당자 관리"
-                    : "업무의 흐름을 기록합니다"}
-              </h1>
-              <p className="muted">
-                {tab === "overview"
-                  ? `${user.name}님, 오늘의 담당 범위와 역할을 확인하세요.`
-                  : tab === "roles"
-                    ? "직책과 담당 범위, 임기를 함께 확인하고 권한을 부여합니다."
-                    : "역할 변경의 주체와 시각을 확인하세요."}
-              </p>
-            </div>
-            <div className="date-label">
-              {date(workspace.server_time)}
-              <small>현재 서버 시각 기준</small>
-            </div>
+        {error && (
+          <div role="alert" className="error banner">
+            {error}
           </div>
-          {error && (
-            <div role="alert" className="error banner">
-              {error}
-            </div>
-          )}
-          {notice && (
-            <div role="status" className="success banner">
-              {notice}
-            </div>
-          )}
-          {tab === "overview" && (
-            <Dashboard
-              workspace={workspace}
-              user={user}
-              onManage={() => setTab("roles")}
-            />
-          )}
-          {tab === "roles" && (
-            <>
-              {Boolean(user.is_admin) && (
-                <OrganizationManagement
-                  units={workspace.units}
-                  onChanged={refresh}
-                />
-              )}
-              {(Boolean(user.is_admin) ||
-                workspace.unit_creation_options.length > 0) && (
-                <StructureManagement
-                  workspace={workspace}
-                  onChanged={refresh}
-                  onClassReady={(id) => {
-                    setGrantOrgId("council");
-                    setScopeId(id);
-                    setRole("class_rep");
-                    setRecipientId("");
-                    setGrantFeedback(null);
+        )}
+        {notice && (
+          <div role="status" className="success banner">
+            {notice}
+          </div>
+        )}
+        {tab === "documents" && (
+          <DocumentLibrary
+            time={workspace.server_time}
+            isAdmin={Boolean(user.is_admin)}
+          />
+        )}
+        {tab === "budgets" && <BudgetWorkspace user={user} />}
+        {tab === "handovers" && <HandoverWorkspace user={user} />}
+        {tab === "overview" && (
+          <Dashboard workspace={workspace} onNavigate={setTab} />
+        )}
+        {tab === "roles" && (
+          <>
+            {Boolean(user.is_admin) && (
+              <OrganizationManagement
+                units={workspace.units}
+                onChanged={refresh}
+              />
+            )}
+            {(Boolean(user.is_admin) ||
+              workspace.unit_creation_options.length > 0) && (
+              <StructureManagement
+                workspace={workspace}
+                onChanged={refresh}
+                onClassReady={(id) => {
+                  setGrantOrgId("council");
+                  setScopeId(id);
+                  setRole("class_rep");
+                  setRecipientId("");
+                  setGrantFeedback(null);
+                }}
+              />
+            )}
+            <div className="panel people-panel">
+              <div className="section-heading">
+                <div>
+                  <h2>
+                    담당자 목록 <span className="count">{people.length}</span>
+                  </h2>
+                  <p className="muted">
+                    자치단체장부터 표시합니다. 더보기로 나머지 담당자를
+                    확인하세요. 연락처와 학번은 허용된 관리 범위에서만
+                    표시됩니다.
+                  </p>
+                </div>
+                <button
+                  className="primary"
+                  disabled={!registerUnits.length}
+                  onClick={() => registration.current?.showModal()}
+                >
+                  ＋ 가상 담당자 등록
+                </button>
+              </div>
+              <label className="search">
+                담당자 검색
+                <input
+                  placeholder="이름 또는 단체명으로 검색"
+                  value={search}
+                  onChange={(e) => {
+                    setSearch(e.target.value);
+                    setShowAllPeople(false);
                   }}
                 />
-              )}
-              <div className="panel people-panel">
-                <div className="section-heading">
-                  <div>
-                    <h2>
-                      담당자 목록 <span className="count">{people.length}</span>
-                    </h2>
-                    <p className="muted">
-                      자치단체장부터 표시합니다. 더보기로 나머지 담당자를
-                      확인하세요. 연락처와 학번은 허용된 관리 범위에서만
-                      표시됩니다.
-                    </p>
-                  </div>
-                  <button
-                    className="primary"
-                    disabled={!registerUnits.length}
-                    onClick={() => registration.current?.showModal()}
-                  >
-                    ＋ 가상 담당자 등록
-                  </button>
-                </div>
-                <label className="search">
-                  담당자 검색
-                  <input
-                    placeholder="이름 또는 단체명으로 검색"
-                    value={search}
-                    onChange={(e) => {
-                      setSearch(e.target.value);
-                      setShowAllPeople(false);
-                    }}
-                  />
-                </label>
-                <div className="table-scroll" id="people-list">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>담당자</th>
-                        <th>소속</th>
-                        <th>담당 정보</th>
-                        {Boolean(user.is_admin) && <th>관리</th>}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {visiblePeople.map((p) => (
-                        <tr key={p.id}>
+              </label>
+              <div className="table-scroll" id="people-list">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>담당자</th>
+                      <th>소속</th>
+                      <th>담당 정보</th>
+                      {Boolean(user.is_admin) && <th>관리</th>}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {visiblePeople.map((p) => (
+                      <tr key={p.id}>
+                        <td>
+                          <strong>{p.name}</strong>
+                        </td>
+                        <td>
+                          {p.unit_ids?.length
+                            ? p.unit_ids.map((id) => (
+                                <div key={id}>{path(id)}</div>
+                              ))
+                            : "학생성공센터"}
+                        </td>
+                        <td>
+                          {p.identifier ? (
+                            <>
+                              <div>{p.identifier}</div>
+                              {p.email_verified === 0 && (
+                                <small>초대 인증 대기(로컬)</small>
+                              )}
+                              <small>
+                                {p.email} · {p.phone}
+                              </small>
+                            </>
+                          ) : (
+                            <span className="muted">열람 범위 제한</span>
+                          )}
+                        </td>
+                        {Boolean(user.is_admin) && (
                           <td>
-                            <strong>{p.name}</strong>
-                          </td>
-                          <td>
-                            {p.unit_ids?.length
-                              ? p.unit_ids.map((id) => (
-                                  <div key={id}>{path(id)}</div>
-                                ))
-                              : "학생성공센터"}
-                          </td>
-                          <td>
-                            {p.identifier ? (
-                              <>
-                                <div>{p.identifier}</div>
-                                {p.email_verified === 0 && (
-                                  <small>초대 인증 대기(로컬)</small>
-                                )}
-                                <small>
-                                  {p.email} · {p.phone}
-                                </small>
-                              </>
-                            ) : (
-                              <span className="muted">열람 범위 제한</span>
+                            {!p.is_admin && (
+                              <button
+                                className="text-button"
+                                onClick={() => setRemovePerson(p)}
+                                aria-label={`${p.name} 제거`}
+                              >
+                                제거
+                              </button>
                             )}
                           </td>
-                          {Boolean(user.is_admin) && (
-                            <td>
-                              {!p.is_admin && (
-                                <button
-                                  className="text-button"
-                                  onClick={() => setRemovePerson(p)}
-                                  aria-label={`${p.name} 제거`}
-                                >
-                                  제거
-                                </button>
-                              )}
-                            </td>
-                          )}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                  {!visiblePeople.length && (
-                    <p className="empty">
-                      {query
-                        ? "검색 결과가 없습니다."
-                        : "표시할 자치단체장이 없습니다. 더보기로 나머지 담당자를 확인하세요."}
-                    </p>
-                  )}
-                </div>
-                {!query && (hiddenPeopleCount > 0 || showAllPeople) && (
-                  <button
-                    type="button"
-                    className="people-more"
-                    aria-expanded={showAllPeople}
-                    aria-controls="people-list"
-                    onClick={() => setShowAllPeople(!showAllPeople)}
-                  >
-                    {showAllPeople
-                      ? "접기 · 자치단체장만 보기"
-                      : `더보기 · 나머지 담당자 ${hiddenPeopleCount}명`}
-                  </button>
+                        )}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {!visiblePeople.length && (
+                  <p className="empty">
+                    {query
+                      ? "검색 결과가 없습니다."
+                      : "표시할 자치단체장이 없습니다. 더보기로 나머지 담당자를 확인하세요."}
+                  </p>
                 )}
               </div>
-              <AcademicGroups groups={workspace.sharing_groups} />
-              {registerUnits.length > 0 && (
-                <InvitationOutbox workspace={workspace} onChanged={refresh} />
+              {!query && (hiddenPeopleCount > 0 || showAllPeople) && (
+                <button
+                  type="button"
+                  className="people-more"
+                  aria-expanded={showAllPeople}
+                  aria-controls="people-list"
+                  onClick={() => setShowAllPeople(!showAllPeople)}
+                >
+                  {showAllPeople
+                    ? "접기 · 자치단체장만 보기"
+                    : `더보기 · 나머지 담당자 ${hiddenPeopleCount}명`}
+                </button>
               )}
-              <div className="two-columns roles-layout">
-                <section className="panel assignments-panel">
-                  <h2>역할과 임기</h2>
-                  <p className="muted">
-                    계정별 업무 권한·담당 범위·유효기간을 관리합니다. 역할
-                    회수는 계정을 제거하지 않습니다. 회수된 역할은 이 목록에서
-                    숨기며 활동 이력은 보존합니다.
-                  </p>
-                  <div
-                    className="assignment-organizations"
-                    role="group"
-                    aria-label="역할과 임기 단체 선택"
-                  >
-                    {assignmentOrganizations.map((org) => {
-                      const count = new Set(
-                        listedAssignments
-                          .filter(
-                            (a) =>
-                              workspace.units.find((u) => u.id === a.unit_id)
-                                ?.org_id === org.id,
-                          )
-                          .map((a) => a.user_id),
-                      ).size;
-                      return (
-                        <button
-                          type="button"
-                          key={org.id}
-                          aria-label={`${org.name} 역할 보기`}
-                          aria-pressed={selectedAssignmentOrg?.id === org.id}
-                          onClick={() => setAssignmentOrgId(org.id)}
-                        >
-                          <strong>{org.name}</strong>
-                          <span>{count}명</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                  {selectedAssignmentOrg && (
-                    <h3 className="assignment-group-heading">
-                      {selectedAssignmentOrg.name} 담당자
-                    </h3>
-                  )}
-                  <div className="assignment-list">
-                    {visibleAssignments.map((a) => (
-                      <article key={a.id} className="assignment">
-                        <div>
-                          <span
-                            className={`state ${a.effective ? "live" : ""}`}
-                          >
-                            {a.effective
-                              ? "유효"
-                              : new Date(a.starts_at) >
-                                  new Date(workspace.server_time)
-                                ? "시작 대기"
-                                : "비활성"}
-                          </span>
-                          <h3>
-                            {workspace.users.find((p) => p.id === a.user_id)
-                              ?.name || "이전 담당자"}{" "}
-                            <small>
-                              {a.role_label || workspace.roles[a.role]}
-                            </small>
-                          </h3>
-                          <p>{path(a.unit_id)}</p>
+            </div>
+            <AcademicGroups groups={workspace.sharing_groups} />
+            {registerUnits.length > 0 && (
+              <InvitationOutbox workspace={workspace} onChanged={refresh} />
+            )}
+            <div className="two-columns roles-layout">
+              <section className="panel assignments-panel">
+                <h2>역할과 임기</h2>
+                <p className="muted">
+                  계정별 업무 권한·담당 범위·유효기간을 관리합니다. 역할 회수는
+                  계정을 제거하지 않습니다. 회수된 역할은 이 목록에서 숨기며
+                  활동 이력은 보존합니다.
+                </p>
+                <div
+                  className="assignment-organizations"
+                  role="group"
+                  aria-label="역할과 임기 단체 선택"
+                >
+                  {assignmentOrganizations.map((org) => {
+                    const count = new Set(
+                      listedAssignments
+                        .filter(
+                          (a) =>
+                            workspace.units.find((u) => u.id === a.unit_id)
+                              ?.org_id === org.id,
+                        )
+                        .map((a) => a.user_id),
+                    ).size;
+                    return (
+                      <button
+                        type="button"
+                        key={org.id}
+                        aria-label={`${org.name} 역할 보기`}
+                        aria-pressed={selectedAssignmentOrg?.id === org.id}
+                        onClick={() => setAssignmentOrgId(org.id)}
+                      >
+                        <strong>{org.name}</strong>
+                        <span>{count}명</span>
+                      </button>
+                    );
+                  })}
+                </div>
+                {selectedAssignmentOrg && (
+                  <h3 className="assignment-group-heading">
+                    {selectedAssignmentOrg.name} 담당자
+                  </h3>
+                )}
+                <div className="assignment-list">
+                  {visibleAssignments.map((a) => (
+                    <article key={a.id} className="assignment">
+                      <div>
+                        <span className={`state ${a.effective ? "live" : ""}`}>
+                          {a.effective
+                            ? "유효"
+                            : new Date(a.starts_at) >
+                                new Date(workspace.server_time)
+                              ? "시작 대기"
+                              : "비활성"}
+                        </span>
+                        <h3>
+                          {workspace.users.find((p) => p.id === a.user_id)
+                            ?.name || "이전 담당자"}{" "}
                           <small>
-                            {date(a.starts_at)} —{" "}
-                            {date(lastIncludedInstant(a.ends_at))}
+                            {a.role_label || workspace.roles[a.role]}
                           </small>
-                          <AcademicChairControls
-                            assignment={a}
-                            workspace={workspace}
-                            admin={Boolean(user.is_admin)}
-                            onAppoint={setChairCandidate}
-                            onRevoke={(row) => {
-                              setRevokeRow(row);
+                        </h3>
+                        <p>{path(a.unit_id)}</p>
+                        <small>
+                          {date(a.starts_at)} —{" "}
+                          {date(lastIncludedInstant(a.ends_at))}
+                        </small>
+                        <AcademicChairControls
+                          assignment={a}
+                          workspace={workspace}
+                          admin={Boolean(user.is_admin)}
+                          onAppoint={setChairCandidate}
+                          onRevoke={(row) => {
+                            setRevokeRow(row);
+                            revocation.current?.showModal();
+                          }}
+                        />
+                      </div>
+                      {!a.revoked_at &&
+                        a.user_id !== user.id &&
+                        (user.is_admin ||
+                          workspace.grant_options.some(
+                            (o) => o.unit_id === a.unit_id && o.role === a.role,
+                          )) && (
+                          <button
+                            className="text-button"
+                            onClick={() => {
+                              setRevokeRow(a);
                               revocation.current?.showModal();
                             }}
-                          />
-                        </div>
-                        {!a.revoked_at &&
-                          a.user_id !== user.id &&
-                          (user.is_admin ||
-                            workspace.grant_options.some(
-                              (o) =>
-                                o.unit_id === a.unit_id && o.role === a.role,
-                            )) && (
-                            <button
-                              className="text-button"
-                              onClick={() => {
-                                setRevokeRow(a);
-                                revocation.current?.showModal();
-                              }}
-                            >
-                              회수
-                            </button>
-                          )}
-                      </article>
-                    ))}
-                  </div>
-                  {!visibleAssignments.length && (
-                    <p className="empty">
-                      {selectedAssignmentOrg
-                        ? "이 단체에 조회 가능한 역할이 없습니다."
-                        : "단체를 선택하면 해당 담당자의 역할과 임기가 표시됩니다."}
-                    </p>
-                  )}
-                </section>
-                <section className="panel grant-panel">
-                  <h2>역할 부여</h2>
-                  <p className="muted">
-                    단체와 담당 범위를 먼저 선택하면 부여할 수 있는 역할이
-                    표시됩니다. 본인의 권한은 변경할 수 없습니다.
+                          >
+                            회수
+                          </button>
+                        )}
+                    </article>
+                  ))}
+                </div>
+                {!visibleAssignments.length && (
+                  <p className="empty">
+                    {selectedAssignmentOrg
+                      ? "이 단체에 조회 가능한 역할이 없습니다."
+                      : "단체를 선택하면 해당 담당자의 역할과 임기가 표시됩니다."}
                   </p>
-                  {roleUnits.length ? (
-                    <form
-                      onSubmit={grant}
-                      onInvalid={() =>
-                        setGrantFeedback({
-                          message:
-                            "담당자·역할·담당 범위·임기 등 필수 입력을 확인해 주세요.",
-                          error: true,
-                        })
-                      }
-                    >
-                      <label>
-                        단체
-                        <select
-                          aria-label="단체"
-                          value={grantOrgId}
-                          required
-                          onChange={(e) => {
-                            setGrantOrgId(e.target.value);
-                            setScopeId("");
-                            setRole("");
-                            setRecipientId("");
-                            setGrantFeedback(null);
-                          }}
-                        >
-                          <option value="" disabled>
-                            단체 선택
+                )}
+              </section>
+              <section className="panel grant-panel">
+                <h2>역할 부여</h2>
+                <p className="muted">
+                  단체와 담당 범위를 먼저 선택하면 부여할 수 있는 역할이
+                  표시됩니다. 본인의 권한은 변경할 수 없습니다.
+                </p>
+                {roleUnits.length ? (
+                  <form
+                    onSubmit={grant}
+                    onInvalid={() =>
+                      setGrantFeedback({
+                        message:
+                          "담당자·역할·담당 범위·임기 등 필수 입력을 확인해 주세요.",
+                        error: true,
+                      })
+                    }
+                  >
+                    <label>
+                      단체
+                      <select
+                        aria-label="단체"
+                        value={grantOrgId}
+                        required
+                        onChange={(e) => {
+                          setGrantOrgId(e.target.value);
+                          setScopeId("");
+                          setRole("");
+                          setRecipientId("");
+                          setGrantFeedback(null);
+                        }}
+                      >
+                        <option value="" disabled>
+                          단체 선택
+                        </option>
+                        {grantOrganizations.map((u) => (
+                          <option key={u.id} value={u.id}>
+                            {u.name}
                           </option>
-                          {grantOrganizations.map((u) => (
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      담당 범위
+                      <select
+                        aria-label="담당 범위"
+                        name="unit_id"
+                        value={scopeId}
+                        required
+                        disabled={!grantOrgId}
+                        onChange={(e) => {
+                          setScopeId(e.target.value);
+                          setRole("");
+                          setRecipientId("");
+                          setGrantFeedback(null);
+                        }}
+                      >
+                        <option value="" disabled>
+                          단체 전체 또는 하위 조직 선택
+                        </option>
+                        {roleUnits
+                          .filter((u) => u.org_id === grantOrgId)
+                          .map((u) => (
                             <option key={u.id} value={u.id}>
-                              {u.name}
+                              {path(u.id)}
                             </option>
                           ))}
-                        </select>
-                      </label>
-                      <label>
-                        담당 범위
-                        <select
-                          aria-label="담당 범위"
-                          name="unit_id"
-                          value={scopeId}
-                          required
-                          disabled={!grantOrgId}
-                          onChange={(e) => {
-                            setScopeId(e.target.value);
-                            setRole("");
-                            setRecipientId("");
-                            setGrantFeedback(null);
-                          }}
-                        >
-                          <option value="" disabled>
-                            단체 전체 또는 하위 조직 선택
+                      </select>
+                    </label>
+                    <label>
+                      역할
+                      <select
+                        aria-label="역할"
+                        name="role"
+                        value={role}
+                        required
+                        disabled={!scopeId}
+                        onChange={(e) => {
+                          setRole(e.target.value);
+                          setGrantFeedback(null);
+                        }}
+                      >
+                        <option value="" disabled>
+                          범위에 맞는 역할 선택
+                        </option>
+                        {roleOptions.map((o) => (
+                          <option key={o.role} value={o.role}>
+                            {o.label}
                           </option>
-                          {roleUnits
-                            .filter((u) => u.org_id === grantOrgId)
-                            .map((u) => (
-                              <option key={u.id} value={u.id}>
-                                {path(u.id)}
-                              </option>
-                            ))}
-                        </select>
-                      </label>
-                      <label>
-                        역할
-                        <select
-                          aria-label="역할"
-                          name="role"
-                          value={role}
-                          required
-                          disabled={!scopeId}
-                          onChange={(e) => {
-                            setRole(e.target.value);
-                            setGrantFeedback(null);
-                          }}
-                        >
-                          <option value="" disabled>
-                            범위에 맞는 역할 선택
-                          </option>
-                          {roleOptions.map((o) => (
-                            <option key={o.role} value={o.role}>
-                              {o.label}
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      대상 담당자
+                      <select
+                        name="user_id"
+                        required
+                        value={recipientId}
+                        disabled={!role}
+                        onChange={(e) => {
+                          setRecipientId(e.target.value);
+                          setGrantFeedback(null);
+                        }}
+                      >
+                        <option value="" disabled>
+                          담당자 선택
+                        </option>
+                        {workspace.users
+                          .filter((p) => p.id !== user.id && !p.is_admin)
+                          .map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {p.name}
                             </option>
                           ))}
-                        </select>
-                      </label>
-                      <label>
-                        대상 담당자
-                        <select
-                          name="user_id"
-                          required
-                          value={recipientId}
-                          disabled={!role}
-                          onChange={(e) => {
-                            setRecipientId(e.target.value);
-                            setGrantFeedback(null);
-                          }}
-                        >
-                          <option value="" disabled>
-                            담당자 선택
-                          </option>
-                          {workspace.users
-                            .filter((p) => p.id !== user.id && !p.is_admin)
-                            .map((p) => (
-                              <option key={p.id} value={p.id}>
-                                {p.name}
-                              </option>
-                            ))}
-                        </select>
-                      </label>
-                      {role === "chair" ? (
-                        <>
-                          <label>
-                            선출자의 학회장 자격
-                            <select
-                              name="prerequisite_id"
-                              key={recipientId}
-                              required
-                              defaultValue=""
-                            >
-                              <option value="" disabled>
-                                공식 임기를 공유할 학회장 자격
-                              </option>
-                              {workspace.assignments
-                                .filter(
-                                  (a) =>
-                                    a.role === "department_head" &&
-                                    a.effective &&
-                                    a.user_id === recipientId,
-                                )
-                                .map((a) => (
-                                  <option value={a.id} key={a.id}>
-                                    {
-                                      workspace.users.find(
-                                        (p) => p.id === a.user_id,
-                                      )?.name
-                                    }{" "}
-                                    · {path(a.unit_id)} ({date(a.starts_at)} —{" "}
-                                    {date(lastIncludedInstant(a.ends_at))})
-                                  </option>
-                                ))}
-                            </select>
-                          </label>
-                          <label>
-                            선출 확인 내용
-                            <textarea
-                              name="election_note"
-                              required
-                              maxLength={300}
-                              placeholder="학회장 투표에 따른 선출 결과 확인 내용을 입력하세요."
-                            />
-                          </label>
-                          <p className="form-note">
-                            의장 임기는 연결된 본인의 학회장 임기와 같습니다.
-                            투표 자체를 이 화면에서 진행하지 않습니다.
-                          </p>
-                        </>
-                      ) : (
-                        <div className="date-inputs">
-                          <label>
-                            임기 시작
-                            <input
-                              name="starts_at"
-                              type="date"
-                              required
-                              defaultValue={`${nowYear}-01-01`}
-                            />
-                          </label>
-                          <label>
-                            임기 종료 (당일 포함)
-                            <input
-                              name="ends_at"
-                              type="date"
-                              required
-                              defaultValue={`${nowYear}-12-31`}
-                            />
-                          </label>
-                        </div>
-                      )}
-                      {grantFeedback && (
-                        <p
-                          role={grantFeedback.error ? "alert" : "status"}
-                          className={grantFeedback.error ? "error" : "success"}
-                        >
-                          {grantFeedback.message}
+                      </select>
+                    </label>
+                    {role === "chair" ? (
+                      <>
+                        <label>
+                          선출자의 학회장 자격
+                          <select
+                            name="prerequisite_id"
+                            key={recipientId}
+                            required
+                            defaultValue=""
+                          >
+                            <option value="" disabled>
+                              공식 임기를 공유할 학회장 자격
+                            </option>
+                            {workspace.assignments
+                              .filter(
+                                (a) =>
+                                  a.role === "department_head" &&
+                                  a.effective &&
+                                  a.user_id === recipientId,
+                              )
+                              .map((a) => (
+                                <option value={a.id} key={a.id}>
+                                  {
+                                    workspace.users.find(
+                                      (p) => p.id === a.user_id,
+                                    )?.name
+                                  }{" "}
+                                  · {path(a.unit_id)} ({date(a.starts_at)} —{" "}
+                                  {date(lastIncludedInstant(a.ends_at))})
+                                </option>
+                              ))}
+                          </select>
+                        </label>
+                        <label>
+                          선출 확인 내용
+                          <textarea
+                            name="election_note"
+                            required
+                            maxLength={300}
+                            placeholder="학회장 투표에 따른 선출 결과 확인 내용을 입력하세요."
+                          />
+                        </label>
+                        <p className="form-note">
+                          의장 임기는 연결된 본인의 학회장 임기와 같습니다. 투표
+                          자체를 이 화면에서 진행하지 않습니다.
                         </p>
-                      )}
-                      <button className="primary" disabled={busy}>
-                        {busy ? "저장 중…" : "역할 부여하기"}
-                      </button>
-                    </form>
-                  ) : (
-                    <div className="empty">
-                      현재 역할에는 추가 역할 부여 권한이 없습니다.
-                    </div>
-                  )}
-                </section>
-              </div>
-            </>
-          )}
-          {tab === "activity" && (
-            <section className="panel">
-              <h2>최근 변경 이력</h2>
-              <p className="muted">
-                선생님은 전체, 최고 책임자는 자기 단체 이력을 조회합니다.
-              </p>
-              {history.map((item) => (
-                <article className="audit-row" key={item.id}>
-                  <span className="timeline-dot"></span>
-                  <div>
-                    <strong>{labels[item.action] || item.action}</strong>
-                    <p>
-                      {path(item.org_id)} · 처리자{" "}
-                      {workspace.users.find((p) => p.id === item.actor_id)
-                        ?.name || "이전 담당자"}
-                    </p>
-                    <small>
-                      {new Date(item.at).toLocaleString("ko-KR")} · 대상{" "}
-                      {item.target_id}
-                    </small>
+                      </>
+                    ) : (
+                      <div className="date-inputs">
+                        <label>
+                          임기 시작
+                          <input
+                            name="starts_at"
+                            type="date"
+                            required
+                            defaultValue={`${nowYear}-01-01`}
+                          />
+                        </label>
+                        <label>
+                          임기 종료 (당일 포함)
+                          <input
+                            name="ends_at"
+                            type="date"
+                            required
+                            defaultValue={`${nowYear}-12-31`}
+                          />
+                        </label>
+                      </div>
+                    )}
+                    {grantFeedback && (
+                      <p
+                        role={grantFeedback.error ? "alert" : "status"}
+                        className={grantFeedback.error ? "error" : "success"}
+                      >
+                        {grantFeedback.message}
+                      </p>
+                    )}
+                    <button className="primary" disabled={busy}>
+                      {busy ? "저장 중…" : "역할 부여하기"}
+                    </button>
+                  </form>
+                ) : (
+                  <div className="empty">
+                    현재 역할에는 추가 역할 부여 권한이 없습니다.
                   </div>
-                </article>
-              ))}
-              {!history.length && !error && (
-                <p className="empty">아직 기록된 변경이 없습니다.</p>
-              )}
-            </section>
-          )}
-          <footer>
-            연이음 · 기록을 잇고, 다음을 준비합니다.
-            <span>조직 · 권한 1차 프로토타입</span>
-          </footer>
-        </main>
-      </div>
+                )}
+              </section>
+            </div>
+          </>
+        )}
+        {tab === "activity" && (
+          <section className="panel">
+            <h2>최근 변경 이력</h2>
+            <p className="muted">
+              선생님은 전체, 최고 책임자는 자기 단체 이력을 조회합니다.
+            </p>
+            {history.map((item) => (
+              <article className="audit-row" key={item.id}>
+                <span className="timeline-dot"></span>
+                <div>
+                  <strong>{labels[item.action] || item.action}</strong>
+                  <p>
+                    {path(item.org_id)} · 처리자{" "}
+                    {workspace.users.find((p) => p.id === item.actor_id)
+                      ?.name || "이전 담당자"}
+                  </p>
+                  <small>
+                    {new Date(item.at).toLocaleString("ko-KR")} · 대상{" "}
+                    {item.target_id}
+                  </small>
+                </div>
+              </article>
+            ))}
+            {!history.length && !error && (
+              <p className="empty">아직 기록된 변경이 없습니다.</p>
+            )}
+          </section>
+        )}
+        <footer>
+          연이음 · 기록을 잇고, 다음을 준비합니다.
+          <span>조직 · 권한 · 자료실 · 예산 · 인수인계 로컬 프로토타입</span>
+        </footer>
+      </main>
       <ChairDesignationDialog
         head={chairCandidate}
         workspace={workspace}
@@ -1194,6 +1167,6 @@ export default function Portal() {
           </div>
         </form>
       </dialog>
-    </div>
+    </WorkspaceShell>
   );
 }

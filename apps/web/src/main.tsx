@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import InvitationAcceptance from "./features/access/InvitationAcceptance";
 import Portal from "./features/access/Portal";
 import "./style.css";
+import "./features/workspace/workspace.css";
 function Entry() {
   const readToken = () =>
     new URLSearchParams(location.hash.slice(1)).get("invite");

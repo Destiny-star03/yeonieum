@@ -1,0 +1,61 @@
+.handover-page {
+  display: grid;
+  gap: 20px;
+}
+.handover-page > .panel > label {
+  display: grid;
+  gap: 6px;
+  max-width: 320px;
+  margin-top: 18px;
+}
+.handover-page .error,
+.handover-page .success {
+  margin-top: 20px;
+}
+.handover-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(175px, 1fr));
+  gap: 12px;
+  margin-top: 18px;
+  align-items: end;
+}
+.handover-form label {
+  display: grid;
+  gap: 6px;
+}
+.handover-form .wide,
+.handover-form h3 {
+  grid-column: 1 / -1;
+}
+.handover-form .check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.handover-list {
+  display: grid;
+  gap: 10px;
+  margin: 18px 0;
+}
+.handover-list > * {
+  border: 1px solid #e6ded4;
+  border-radius: 12px;
+  padding: 14px;
+  text-align: left;
+  display: grid;
+  gap: 6px;
+  width: 100%;
+}
+.handover-list span,
+.handover-list small {
+  color: #6b625b;
+}
+.handover-list button.active {
+  background: #f7f3ee;
+  border-color: #c9bfb4;
+}
+@media (max-width: 600px) {
+  .handover-form {
+    grid-template-columns: 1fr;
+  }
+}
