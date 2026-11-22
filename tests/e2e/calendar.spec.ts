@@ -43,6 +43,15 @@ function nextDay(day: string) {
     .slice(0, 10);
 }
 
+async function openTimeSettings(editor: Locator) {
+  const toggle = editor.getByRole("button", {
+    name: "종일·시간대·반복 설정",
+    exact: true,
+  });
+  if ((await toggle.getAttribute("aria-expanded")) === "false")
+    await toggle.click();
+}
+
 test("달력 빈 곳을 누르면 편집을 마치고 기본 안내로 돌아가며 저장 중에는 닫지 않는다", async ({
   page,
 }) => {
@@ -106,6 +115,102 @@ test("달력 빈 곳을 누르면 편집을 마치고 기본 안내로 돌아가
   ).toBeVisible();
 });
 
+test("종일·시간대·반복은 요약 줄에서 펼치고 접어도 입력을 보존하며 저장 전에는 요청하지 않는다", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  await login(page, "staff-demo");
+  await page
+    .locator(".calendar-workspace")
+    .getByRole("button", { name: "＋ 일정 추가", exact: true })
+    .click();
+  const editor = page
+    .getByRole("dialog")
+    .filter({ has: page.getByLabel("일정 제목") });
+  const toggle = editor.getByRole("button", {
+    name: "종일·시간대·반복 설정",
+    exact: true,
+  });
+  const allDay = editor.getByRole("checkbox", { name: "종일", exact: true });
+  const zone = editor.getByLabel("시간대", { exact: true });
+  const repeat = editor.getByRole("button", { name: "반복 설정", exact: true });
+  let writes = 0;
+  page.on("request", (r) => {
+    if (r.url().endsWith("/api/calendar/events") && r.method() === "POST")
+      writes++;
+  });
+  await expect(toggle).toHaveText("종일시간대반복");
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(allDay).not.toBeVisible();
+  await expect(zone).not.toBeVisible();
+  await expect(repeat).not.toBeVisible();
+  await page.mouse.move(0, 0);
+  const background = await toggle.evaluate(
+    (el) => getComputedStyle(el).backgroundColor,
+  );
+  await toggle.hover();
+  await expect
+    .poll(() => toggle.evaluate((el) => getComputedStyle(el).backgroundColor))
+    .not.toBe(background);
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await mkdir("../../local-data/preview", { recursive: true });
+  await editor.locator("fieldset").first().screenshot({
+    path: "../../local-data/preview/calendar-settings-hover.png",
+  });
+  await toggle.focus();
+  await toggle.press("Enter");
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  await expect(allDay).toBeVisible();
+  await expect(zone).toBeVisible();
+  await expect(repeat).toHaveText("↻반복⌄");
+  await editor.locator("fieldset").first().screenshot({
+    path: "../../local-data/preview/calendar-settings-expanded.png",
+  });
+  await zone.selectOption("UTC");
+  await repeat.click();
+  await page
+    .getByRole("menuitemradio", { name: "1일마다", exact: true })
+    .click();
+  await allDay.check();
+  await expect(zone).toHaveCount(0);
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  for (const width of [390, 320]) {
+    await page.setViewportSize({ width, height: 800 });
+    await toggle.click();
+    await expect(allDay).toBeChecked();
+    await expect(repeat).toContainText("1일마다");
+    await toggle.click();
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
+  }
+  await toggle.click();
+  await allDay.uncheck();
+  await expect(zone).toHaveValue("UTC");
+  expect(writes).toBe(0);
+  await editor.getByLabel("일정 제목").fill("가상 접힌 시간 설정");
+  const response = page.waitForResponse(
+    (r) =>
+      r.url().endsWith("/api/calendar/events") &&
+      r.request().method() === "POST",
+  );
+  await editor.getByRole("button", { name: "일정 추가", exact: true }).click();
+  expect(await (await response).json()).toMatchObject({
+    all_day: false,
+    time_zone: "UTC",
+    recurrence: { frequency: "daily" },
+  });
+  expect(writes).toBe(1);
+  await page
+    .locator(".calendar-workspace")
+    .getByRole("button", { name: "＋ 일정 추가", exact: true })
+    .click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+});
+
 test("요일 반복 메뉴와 사용자 지정에서 간격·여러 요일·종료 횟수를 저장한다", async ({
   page,
 }) => {
@@ -121,6 +226,7 @@ test("요일 반복 메뉴와 사용자 지정에서 간격·여러 요일·종�
     .getByRole("dialog")
     .filter({ has: page.getByLabel("일정 제목") });
   await editor.getByLabel("일정 제목").fill("가상 요일 반복");
+  await openTimeSettings(editor);
   const trigger = editor.getByRole("button", {
     name: "반복 설정",
     exact: true,
@@ -175,6 +281,7 @@ test("요일 반복 메뉴와 사용자 지정에서 간격·여러 요일·종�
     .click();
   for (const width of [390, 320]) {
     await page.setViewportSize({ width, height: 900 });
+    await openTimeSettings(editor);
     await trigger.click();
     await page
       .getByRole("menuitem", { name: "사용자 지정…", exact: true })
@@ -263,6 +370,112 @@ test("일정 색상을 점 팔레트로 선택·저장하고 기본색으로 되
   await expect(event).toHaveClass(/cal-color-default/);
 });
 
+test("시작 시간을 바꾸면 기본 30분 또는 직접 설정한 일정 길이를 유지해 종료 시간과 날짜를 옮긴다", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  await login(page, "staff-demo");
+  const today = dayOf(
+    (await (await page.request.get("/api/workspace")).json()).server_time,
+  );
+  await page
+    .locator(".calendar-workspace")
+    .getByRole("button", { name: `${today} 일정 추가`, exact: true })
+    .click();
+  const editor = page
+    .getByRole("dialog")
+    .filter({ has: page.getByLabel("일정 제목") });
+  const start = editor.getByRole("combobox", {
+    name: "시작 시간",
+    exact: true,
+  });
+  const end = editor.getByRole("combobox", { name: "종료 시간", exact: true });
+  const length = editor.getByLabel("일정 길이");
+  await expect(length).toHaveText("30분");
+  await start.fill("19:15");
+  await expect(end).toHaveValue("19:45");
+  await expect(length).toHaveText("30분");
+  await start.fill("00:00");
+  await expect(end).toHaveValue("00:30");
+  await end.fill("01:15");
+  await expect(length).toHaveText("1시간 15분");
+  await start.fill("12:00");
+  await expect(end).toHaveValue("13:15");
+  await expect(length).toHaveText("1시간 15분");
+  for (const width of [390, 320]) {
+    await page.setViewportSize({ width, height: 800 });
+    await start.scrollIntoViewIfNeeded();
+    const endBox = await end.boundingBox(),
+      lengthBox = await length.boundingBox();
+    expect(lengthBox!.x).toBeGreaterThanOrEqual(endBox!.x + endBox!.width);
+    expect(lengthBox!.y).toBeGreaterThanOrEqual(endBox!.y);
+    expect(lengthBox!.y + lengthBox!.height).toBeLessThanOrEqual(
+      endBox!.y + endBox!.height,
+    );
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
+  }
+  await mkdir("../../local-data/preview", { recursive: true });
+  await editor
+    .locator(".cal-period-times")
+    .screenshot({ path: "../../local-data/preview/calendar-duration.png" });
+  await start.fill("2");
+  await expect(end).toHaveValue("13:15");
+  await start.fill("23:30");
+  await expect(end).toHaveValue("00:45");
+  await expect(length).toHaveText("1시간 15분");
+  await expect(
+    editor.getByRole("button", { name: "종료일", exact: true }),
+  ).toHaveAttribute("title", `종료일 · ${nextDay(today)}`);
+  const title = `시간 연동 ${Date.now()}`;
+  await editor.getByLabel("일정 제목").fill(title);
+  const created = page.waitForResponse(
+    (r) =>
+      r.url().endsWith("/api/calendar/events") &&
+      r.request().method() === "POST",
+  );
+  await editor.getByRole("button", { name: "일정 추가", exact: true }).click();
+  const saved = await (await created).json();
+  expect(Date.parse(saved.starts_at)).toBe(
+    Date.parse(`${today}T23:30:00+09:00`),
+  );
+  expect(Date.parse(saved.ends_at)).toBe(
+    Date.parse(`${nextDay(today)}T00:45:00+09:00`),
+  );
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  await page.reload();
+  await page
+    .locator(".calendar-event")
+    .filter({ hasText: title })
+    .first()
+    .click();
+  await expect(length).toHaveText("1시간 15분");
+  await openTimeSettings(editor);
+  await editor.getByLabel("시간대", { exact: true }).selectOption("UTC");
+  await start.click();
+  await page
+    .getByRole("listbox", { name: "시작 시간 선택" })
+    .getByRole("option", { name: "08:00", exact: true })
+    .click();
+  await expect(end).toHaveValue("09:15");
+  await expect(length).toHaveText("1시간 15분");
+  await expect(
+    editor.getByRole("button", { name: "종료일", exact: true }),
+  ).toHaveAttribute("title", `종료일 · ${today}`);
+  const updated = page.waitForResponse(
+    (r) =>
+      r.url().endsWith(`/api/calendar/events/${saved.id}/update`) &&
+      r.request().method() === "POST",
+  );
+  await editor.getByRole("button", { name: "변경 저장", exact: true }).click();
+  const result = await (await updated).json();
+  expect(Date.parse(result.starts_at)).toBe(Date.parse(`${today}T08:00:00Z`));
+  expect(Date.parse(result.ends_at)).toBe(Date.parse(`${today}T09:15:00Z`));
+});
+
 test("날짜·시간 선택창과 종일 전환을 데스크톱·모바일에서 사용한다", async ({
   page,
 }) => {
@@ -310,6 +523,7 @@ test("날짜·시간 선택창과 종일 전환을 데스크톱·모바일에서
   await end.press("ArrowDown");
   await end.press("Enter");
   await expect(end).toHaveValue("18:45");
+  await openTimeSettings(editor);
   await editor.getByRole("checkbox", { name: "종일", exact: true }).check();
   await expect(start).toBeDisabled();
   await expect(end).toBeDisabled();
@@ -394,6 +608,7 @@ test("대시보드 캘린더에 종일·시간 일정을 저장하고 수정·�
   const dialog = page.getByRole("dialog");
   await dialog.getByLabel("일정 제목").fill("가상 운영 회의");
   await dialog.getByLabel("캘린더 · 공개 범위").selectOption("software");
+  await openTimeSettings(dialog);
   await dialog.getByRole("checkbox", { name: "종일", exact: true }).check();
   await pickDate(page, dialog, "종료일", tomorrow);
   await dialog.getByLabel("장소", { exact: true }).fill("가상 회의실");
@@ -438,6 +653,7 @@ test("대시보드 캘린더에 종일·시간 일정을 저장하고 수정·�
     })
     .click();
   await dialog.getByLabel("일정 제목").fill("가상 운영 회의 변경");
+  await openTimeSettings(dialog);
   await dialog.getByRole("checkbox", { name: "종일", exact: true }).uncheck();
   await pickDate(page, dialog, "종료일", today);
   await dialog.getByLabel("시작 시간", { exact: true }).fill("13:00");
@@ -513,6 +729,14 @@ test("모바일에서 상위 조직 일정은 읽기 전용이며 내 반 일정
     .click();
   const dialog = page.getByRole("dialog");
   await expect(dialog.getByLabel("일정 제목")).toBeDisabled();
+  await openTimeSettings(dialog);
+  await expect(
+    dialog.getByRole("checkbox", { name: "종일", exact: true }),
+  ).toBeDisabled();
+  await expect(dialog.getByLabel("시간대", { exact: true })).toBeDisabled();
+  await expect(
+    dialog.getByRole("button", { name: "반복 설정", exact: true }),
+  ).toBeDisabled();
   await expect(
     dialog.getByRole("button", { name: "일정 삭제", exact: true }),
   ).toHaveCount(0);
@@ -619,6 +843,7 @@ test("노션형 패널의 반복·참여자·링크·검색·우클릭 복사와
     .getByRole("dialog")
     .filter({ has: page.getByLabel("일정 제목") });
   await editor.getByLabel("일정 제목").fill("가상 반복 운영회의");
+  await openTimeSettings(editor);
   await editor.getByLabel("캘린더 · 공개 범위").selectOption("software");
   await editor.getByRole("button", { name: "반복 설정", exact: true }).click();
   await page
@@ -664,6 +889,7 @@ test("노션형 패널의 반복·참여자·링크·검색·우클릭 복사와
     }),
   ).toBeVisible();
   await original.click();
+  await openTimeSettings(editor);
   await expect(
     editor.getByRole("button", { name: "반복 설정", exact: true }),
   ).toContainText("1주마다");
@@ -685,6 +911,7 @@ test("노션형 패널의 반복·참여자·링크·검색·우클릭 복사와
     "가상 반복 운영회의 사본",
   );
   await editor.getByLabel("일정 제목").fill("가상 복사 일정");
+  await openTimeSettings(editor);
   await editor.getByRole("button", { name: "반복 설정", exact: true }).click();
   await page
     .getByRole("menuitemradio", { name: "반복하지 않음", exact: true })

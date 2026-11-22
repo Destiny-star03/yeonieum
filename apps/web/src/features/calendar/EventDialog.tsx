@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import {
   api,
   type CalendarUnit,
@@ -48,7 +48,14 @@ function initial(
           : event.ends_at,
         event.all_day ? "Asia/Seoul" : zone,
       )
-    : { day: draft.endDay || draft.day, time: draft.endTime || "09:30" };
+    : draft.endTime
+      ? { day: draft.endDay || draft.day, time: draft.endTime }
+      : localFields(
+          new Date(
+            Date.parse(localInstant(start.day, start.time, zone)) + 30 * 60000,
+          ).toISOString(),
+          zone,
+        );
   if (draft.copy) {
     const days =
       Date.parse(atMidnight(draft.day)) - Date.parse(atMidnight(start.day));
@@ -76,6 +83,15 @@ function initial(
     color: event?.color || "default",
   };
 }
+const validTime = /^([01][0-9]|2[0-3]):[0-5][0-9]$/;
+function periodDuration(values: ReturnType<typeof initial>) {
+  if (!validTime.test(values.startTime) || !validTime.test(values.endTime))
+    return 0;
+  const duration =
+    Date.parse(`${values.endDay}T${values.endTime}:00Z`) -
+    Date.parse(`${values.startDay}T${values.startTime}:00Z`);
+  return Number.isFinite(duration) && duration > 0 ? duration : 0;
+}
 export default function EventDialog({
   draft,
   units,
@@ -91,6 +107,9 @@ export default function EventDialog({
   const [values, setValues] = useState(() =>
     initial(draft, defaultUnit, defaultZone),
   );
+  const lastDuration = useRef(periodDuration(values) || 30 * 60000);
+  const [timeSettingsOpen, setTimeSettingsOpen] = useState(false);
+  const timeSettingsId = useId();
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(Boolean(draft.removeRequested));
@@ -101,11 +120,24 @@ export default function EventDialog({
   const titleRef = useRef<HTMLInputElement>(null);
   const editable = !draft.event || draft.event.can_edit;
   useEffect(() => {
+    if (!values.allDay) {
+      const duration = periodDuration(values);
+      if (duration) lastDuration.current = duration;
+    }
+  }, [
+    values.startDay,
+    values.startTime,
+    values.endDay,
+    values.endTime,
+    values.allDay,
+  ]);
+  useEffect(() => {
     onBusy(busy);
     return () => onBusy(false);
   }, [busy, onBusy]);
   useEffect(() => {
     setValues(initial(draft, defaultUnit, defaultZone));
+    setTimeSettingsOpen(false);
     setConfirming(Boolean(draft.removeRequested));
     setError("");
     setPeopleSearch("");
@@ -141,6 +173,24 @@ export default function EventDialog({
     value: (typeof values)[K],
   ) {
     setValues((old) => ({ ...old, [key]: value }));
+    onDirty(true);
+  }
+  function changeStartTime(time: string) {
+    // Keep the last valid length while a time is only partly typed.
+    const end = validTime.test(time)
+      ? localFields(
+          new Date(
+            Date.parse(localInstant(values.startDay, time, values.zone)) +
+              (periodDuration(values) || lastDuration.current),
+          ).toISOString(),
+          values.zone,
+        )
+      : null;
+    setValues((old) => ({
+      ...old,
+      startTime: time,
+      ...(end ? { endDay: end.day, endTime: end.time } : {}),
+    }));
     onDirty(true);
   }
   function pick(key: "participantIds" | "attachmentIds", id: string) {
@@ -294,7 +344,7 @@ export default function EventDialog({
             세부 정보는 작성자·참여자·관리권자에게만 표시됩니다.
           </p>
         )}
-        <fieldset disabled={busy || !editable} className="cal-editor-section">
+        <fieldset className="cal-editor-section">
           <legend>날짜와 시간</legend>
           <div className={`cal-period ${values.allDay ? "is-all-day" : ""}`}>
             <div className="cal-period-times">
@@ -305,7 +355,7 @@ export default function EventDialog({
                 label="시작 시간"
                 value={values.startTime}
                 disabled={busy || !editable || values.allDay}
-                onChange={(time) => change("startTime", time)}
+                onChange={changeStartTime}
               />
               <span className="cal-period-arrow" aria-hidden="true">
                 →
@@ -358,38 +408,70 @@ export default function EventDialog({
               />
             </div>
           </div>
-          <label className="calendar-check cal-all-day-toggle">
-            <input
-              type="checkbox"
-              checked={values.allDay}
-              onChange={(e) => change("allDay", e.target.checked)}
-            />
-            종일
-          </label>
-          {!values.allDay && (
-            <label className="cal-period-zone">
-              <span aria-hidden="true">◎</span>
-              <select
-                aria-label="시간대"
-                value={values.zone}
-                onChange={(e) =>
-                  change("zone", e.target.value as "Asia/Seoul" | "UTC")
-                }
-              >
-                <option value="Asia/Seoul">한국 · GMT+9</option>
-                <option value="UTC">UTC · GMT+0</option>
-              </select>
-            </label>
-          )}
-        </fieldset>
-        <fieldset disabled={busy || !editable} className="cal-editor-section">
-          <legend>반복</legend>
-          <RepeatPicker
-            value={values.repeat}
-            day={values.startDay}
-            disabled={busy || !editable}
-            onChange={(repeat) => change("repeat", repeat)}
-          />
+          <div
+            className={`cal-time-settings ${timeSettingsOpen ? "is-expanded" : ""}`}
+          >
+            <button
+              type="button"
+              className="cal-time-settings-toggle"
+              aria-label="종일·시간대·반복 설정"
+              aria-expanded={timeSettingsOpen}
+              aria-controls={timeSettingsId}
+              title={timeSettingsOpen ? "시간 설정 접기" : "시간 설정 펼치기"}
+              disabled={busy}
+              onClick={() => setTimeSettingsOpen((open) => !open)}
+            >
+              {timeSettingsOpen ? (
+                <span aria-hidden="true">⌃</span>
+              ) : (
+                <>
+                  <span className={values.allDay ? "is-set" : ""}>종일</span>
+                  <span className={values.zone !== defaultZone ? "is-set" : ""}>
+                    시간대
+                  </span>
+                  <span className={values.repeat ? "is-set" : ""}>반복</span>
+                </>
+              )}
+            </button>
+            <div
+              id={timeSettingsId}
+              className="cal-time-settings-content"
+              hidden={!timeSettingsOpen}
+            >
+              <label className="calendar-check cal-all-day-toggle">
+                <input
+                  type="checkbox"
+                  checked={values.allDay}
+                  disabled={busy || !editable}
+                  onChange={(e) => change("allDay", e.target.checked)}
+                />
+                종일
+              </label>
+              {!values.allDay && (
+                <label className="cal-period-zone">
+                  <span aria-hidden="true">◎</span>
+                  <select
+                    aria-label="시간대"
+                    value={values.zone}
+                    disabled={busy || !editable}
+                    onChange={(e) =>
+                      change("zone", e.target.value as "Asia/Seoul" | "UTC")
+                    }
+                  >
+                    <option value="Asia/Seoul">한국 · GMT+9</option>
+                    <option value="UTC">UTC · GMT+0</option>
+                  </select>
+                </label>
+              )}
+              <RepeatPicker
+                value={values.repeat}
+                day={values.startDay}
+                disabled={busy || !editable}
+                emptyLabel="반복"
+                onChange={(repeat) => change("repeat", repeat)}
+              />
+            </div>
+          </div>
         </fieldset>
         <fieldset disabled={busy || !editable} className="cal-editor-section">
           <legend>참여자와 장소</legend>

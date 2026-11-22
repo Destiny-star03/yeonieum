@@ -1555,7 +1555,7 @@
 }
 .cal-period-duration {
   color: var(--muted);
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.4;
   min-width: 0;
 }
@@ -1583,8 +1583,60 @@
 .cal-date-trigger[aria-expanded="true"] {
   background: var(--soft);
 }
+.cal-time-settings {
+  position: relative;
+  min-width: 0;
+}
+.cal-time-settings-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: 18px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+}
+.cal-time-settings-toggle:hover:not(:disabled),
+.cal-time-settings-toggle:focus-visible {
+  background: var(--soft);
+}
+.cal-time-settings-toggle .is-set {
+  color: var(--ink);
+  font-weight: 600;
+}
+.cal-time-settings.is-expanded > .cal-time-settings-toggle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 1;
+  margin: 0;
+  width: 27px;
+  height: 27px;
+  justify-content: center;
+}
+.cal-time-settings-content {
+  display: grid;
+  gap: 12px;
+  padding-top: 3px;
+}
+.cal-time-settings-content[hidden] {
+  display: none;
+}
+.cal-time-settings .cal-repeat-field > span {
+  display: none;
+}
+.cal-time-settings .cal-repeat-trigger {
+  padding: 4px 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+}
 .notion-event-editor .cal-all-day-toggle {
   gap: 10px;
+  padding-right: 30px;
 }
 .cal-all-day-toggle input[type="checkbox"] {
   appearance: none;

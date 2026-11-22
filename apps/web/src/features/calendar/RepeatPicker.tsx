@@ -44,11 +44,13 @@ export default function RepeatPicker({
   value,
   day,
   disabled,
+  emptyLabel = "반복하지 않음",
   onChange,
 }: {
   value: Repeat | null;
   day: string;
   disabled: boolean;
+  emptyLabel?: string;
   onChange: (value: Repeat | null) => void;
 }) {
   const anchor = useRef<HTMLButtonElement>(null),
@@ -99,7 +101,7 @@ export default function RepeatPicker({
         onClick={() => setOpen(!open)}
       >
         <span aria-hidden="true">↻</span>
-        <span>{repeatLabel(value, day)}</span>
+        <span>{value ? repeatLabel(value, day) : emptyLabel}</span>
         <span aria-hidden="true">⌄</span>
       </button>
       {open && !disabled && (
