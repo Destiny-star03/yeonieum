@@ -1,0 +1,1 @@
+"""Local responsibility handover workflow."""

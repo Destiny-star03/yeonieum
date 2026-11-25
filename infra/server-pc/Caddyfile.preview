@@ -1,0 +1,18 @@
+{
+	admin off
+}
+
+http://127.0.0.1:{$YEONIEUM_WEB_PORT:8173} {
+	bind {$YEONIEUM_PREVIEW_BIND:127.0.0.1}
+
+	@api path /api /api/*
+	handle @api {
+		reverse_proxy {$YEONIEUM_API_HOST:127.0.0.1}:{$YEONIEUM_API_PORT:8180}
+	}
+
+	handle {
+		root * "{$YEONIEUM_WEB_ROOT:apps/web/dist}"
+		try_files {path} /index.html
+		file_server
+	}
+}
