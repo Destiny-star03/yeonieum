@@ -109,6 +109,48 @@ textarea {
   min-height: 84px;
   resize: vertical;
 }
+@supports (appearance: base-select) and selector(::picker(select)) {
+  select:not([multiple]):not([size]),
+  select:not([multiple]):not([size])::picker(select) {
+    appearance: base-select;
+  }
+  select:not([multiple]):not([size])::picker(select) {
+    position-area: inline-start span-block-end;
+    position-try-order: normal;
+    position-try-fallbacks:
+      block-end span-inline-start,
+      block-end span-inline-end,
+      block-start span-inline-start,
+      block-start span-inline-end;
+    align-self: start;
+    justify-self: end;
+    margin: 4px;
+    padding: 6px;
+    min-inline-size: min(148px, calc(100vw - 16px));
+    max-inline-size: min(290px, calc(100vw - 16px));
+    max-block-size: min(320px, calc(100dvh - 16px));
+    border: 1px solid var(--soft);
+    border-radius: 14px;
+    background: var(--panel);
+    color: var(--ink);
+    box-shadow: 0 8px 30px #1f1d1b20;
+    font: inherit;
+  }
+  select:not([multiple]):not([size]) option {
+    min-block-size: 33px;
+    padding: 6px 9px;
+    border-radius: 8px;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  select:not([multiple]):not([size])
+    option:is(:checked, :hover, :focus-visible) {
+    background: var(--soft);
+  }
+  select:not([multiple]):not([size])::picker-icon {
+    color: var(--muted);
+  }
+}
 form {
   display: flex;
   flex-direction: column;

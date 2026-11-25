@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Repeat } from "./api";
 import { DatePicker, PickerPopover } from "./DateTimePickers";
+import CalendarIcon from "./CalendarIcon";
 
 const weekdays = ["일", "월", "화", "수", "목", "금", "토"];
 function weekday(day: string) {
@@ -100,7 +101,7 @@ export default function RepeatPicker({
         disabled={disabled}
         onClick={() => setOpen(!open)}
       >
-        <span aria-hidden="true">↻</span>
+        <CalendarIcon name="repeat" />
         <span>{value ? repeatLabel(value, day) : emptyLabel}</span>
         <span aria-hidden="true">⌄</span>
       </button>
@@ -137,23 +138,38 @@ export default function RepeatPicker({
               }
             }}
           >
-            {options.map((rule, i) => (
-              <button
-                type="button"
-                role="menuitemradio"
-                aria-checked={normalized(rule, day) === normalized(value, day)}
-                key={i}
-                onClick={() => {
-                  onChange(rule);
-                  close();
-                }}
-              >
-                <span aria-hidden="true">
-                  {normalized(rule, day) === normalized(value, day) ? "✓" : ""}
-                </span>
-                {i === 2 ? "평일마다 월~금" : repeatLabel(rule, day)}
-              </button>
-            ))}
+            {options.map((rule, i) => {
+              const label = i === 2 ? "평일마다 월~금" : repeatLabel(rule, day);
+              const [interval, detail] = rule ? label.split(/ (.+)/) : [label];
+              const selected = normalized(rule, day) === normalized(value, day);
+              return (
+                <button
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={selected}
+                  key={i}
+                  onClick={() => {
+                    onChange(rule);
+                    close();
+                  }}
+                >
+                  <span className="cal-repeat-option-check" aria-hidden="true">
+                    {selected ? "✓" : ""}
+                  </span>
+                  <span>
+                    {interval}
+                    {detail && (
+                      <>
+                        {" "}
+                        <span className="cal-repeat-option-detail">
+                          {detail}
+                        </span>
+                      </>
+                    )}
+                  </span>
+                </button>
+              );
+            })}
             <button
               type="button"
               role="menuitem"

@@ -30,6 +30,23 @@ def can_create(conn, user, target, now):
     return live_unit(conn, target) and target["id"] in document_scope(conn, user, now)
 
 
+def private_scope(conn, user):
+    return {
+        row["id"]
+        for row in conn.execute(
+            """SELECT u.id FROM memberships m JOIN units u ON u.id=m.unit_id
+               JOIN units org ON org.id=u.org_id WHERE m.user_id=? AND u.active=1 AND org.active=1""",
+            (user["id"],),
+        )
+    }
+
+
+def private_folder_access(conn, user, org_id, now):
+    return organization_access(conn, user, org_id, now) or any(
+        unit(conn, ident)["org_id"] == org_id for ident in private_scope(conn, user)
+    )
+
+
 def organization_access(conn, user, org_id, now):
     target = unit(conn, org_id)
     if target["kind"] != "organization" or not live_unit(conn, target):
@@ -53,9 +70,21 @@ def can_manage(conn, user, row, now):
     if not live_unit(conn, unit(conn, row["unit_id"])):
         return False
     if row["audience"] == "private":
-        return row["created_by"] == user["id"] and organization_access(conn, user, row["org_id"], now)
+        return row["created_by"] == user["id"] and (
+            organization_access(conn, user, row["org_id"], now) or row["unit_id"] in private_scope(conn, user)
+        )
     return manager(conn, user, row, now) or (
         row["created_by"] == user["id"] and row["unit_id"] in document_scope(conn, user, now)
+    )
+
+
+def can_move(conn, user, row, now):
+    return (
+        not row["deleted_at"]
+        and row["audience"] in {"organization", "private"}
+        and (row["audience"] != "private" or row["created_by"] == user["id"])
+        and live_unit(conn, unit(conn, row["unit_id"]))
+        and manager(conn, user, row, now)
     )
 
 
@@ -89,6 +118,10 @@ def audiences(conn, user, target, now):
 
 
 def validate_audience(conn, user, target, key, now):
+    if key == "private" and target["id"] in private_scope(conn, user):
+        return
+    if not can_create(conn, user, target, now):
+        raise HTTPException(403, "현재 담당 범위나 본인 소속의 개인 보관함에 자료를 등록할 수 있습니다.")
     if key not in {row["key"] for row in audiences(conn, user, target, now)}:
         raise HTTPException(403, "이 자료에 지정할 수 없는 공유 대상입니다.")
 
@@ -101,13 +134,17 @@ def creation_options(conn, user, now):
             else target["name"]
         )
 
+    shared = document_scope(conn, user, now)
+    personal = private_scope(conn, user)
     return [
         {
             "id": row["id"],
             "org_id": row["org_id"],
             "label": label(row),
-            "audiences": audiences(conn, user, row, now),
+            "audiences": audiences(conn, user, row, now)
+            if row["id"] in shared
+            else [{"key": "private", "label": "개인 보관 · 나만 보기"}],
         }
         for row in conn.execute("SELECT * FROM units ORDER BY name,id")
-        if can_create(conn, user, row, now)
+        if row["id"] in shared or row["id"] in personal
     ]

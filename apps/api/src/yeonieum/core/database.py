@@ -1,4 +1,4 @@
-"""SQLite persistence for synthetic local demo data only."""
+"""Database initialization and transaction boundaries for the application."""
 
 import json
 import sqlite3
@@ -6,10 +6,12 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from uuid import uuid4
 
+from yeonieum.core.postgres import PostgresConnection, PostgresDatabase
 from yeonieum.modules.budgets.schema import SCHEMA as BUDGET_SCHEMA
 from yeonieum.modules.calendar.schema import SCHEMA as CALENDAR_SCHEMA
 from yeonieum.modules.documents.schema import SCHEMA as DOCUMENT_SCHEMA
 from yeonieum.modules.handovers.schema import SCHEMA as HANDOVER_SCHEMA
+from yeonieum.modules.notifications.schema import SCHEMA as NOTIFICATION_SCHEMA
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -21,7 +23,7 @@ CREATE TABLE IF NOT EXISTS units (
  id TEXT PRIMARY KEY, org_id TEXT NOT NULL REFERENCES units(id),
  parent_id TEXT REFERENCES units(id), kind TEXT NOT NULL, name TEXT NOT NULL
 );
-CREATE UNIQUE INDEX IF NOT EXISTS unit_identity ON units(org_id, ifnull(parent_id, ''), kind, name);
+CREATE UNIQUE INDEX IF NOT EXISTS unit_identity ON units(org_id, coalesce(parent_id, ''), kind, name);
 CREATE TABLE IF NOT EXISTS role_definitions (
  id TEXT PRIMARY KEY, org_id TEXT NOT NULL REFERENCES units(id), code TEXT NOT NULL,
  label TEXT NOT NULL, scope_kind TEXT NOT NULL, builtin INTEGER NOT NULL DEFAULT 0,
@@ -54,12 +56,22 @@ CREATE TABLE IF NOT EXISTS audit (
 );
 """
 
+APP_SCHEMA = (
+    SCHEMA + DOCUMENT_SCHEMA + BUDGET_SCHEMA + HANDOVER_SCHEMA + CALENDAR_SCHEMA + NOTIFICATION_SCHEMA
+)
+EXPENSE_REQUEST_INDEX = (
+    "CREATE UNIQUE INDEX IF NOT EXISTS expense_request_once "
+    "ON expenses(created_by,request_id) WHERE request_id IS NOT NULL"
+)
 
-def connect(path):
-    conn = sqlite3.connect(path, isolation_level=None, check_same_thread=False, timeout=10)
+
+def connect(database):
+    if isinstance(database, PostgresDatabase):
+        return database.connect()
+    conn = sqlite3.connect(database, isolation_level=None, check_same_thread=False, timeout=10)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys=ON")
-    conn.executescript(SCHEMA + DOCUMENT_SCHEMA + BUDGET_SCHEMA + HANDOVER_SCHEMA + CALENDAR_SCHEMA)
+    conn.executescript(APP_SCHEMA)
     if "folder_id" not in {r[1] for r in conn.execute("PRAGMA table_info(documents)")}:
         conn.execute("ALTER TABLE documents ADD COLUMN folder_id TEXT REFERENCES document_folders(id)")
     if "details" not in {r[1] for r in conn.execute("PRAGMA table_info(calendar_events)")}:
@@ -74,14 +86,35 @@ def connect(path):
         conn.execute("ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 1")
     if "request_id" not in {r[1] for r in conn.execute("PRAGMA table_info(expenses)")}:
         conn.execute("ALTER TABLE expenses ADD COLUMN request_id TEXT")
-    conn.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS expense_request_once ON expenses(created_by,request_id) WHERE request_id IS NOT NULL"
-    )
+    conn.execute(EXPENSE_REQUEST_INDEX)
     return conn
+
+
+def initialize(conn):
+    if not isinstance(conn, PostgresConnection):
+        return
+    with transaction(conn):
+        for statement in APP_SCHEMA.split(";"):
+            if statement.strip():
+                conn.execute(statement)
+        conn.execute("ALTER TABLE units ADD COLUMN IF NOT EXISTS active INTEGER NOT NULL DEFAULT 1")
+        conn.execute("ALTER TABLE units ADD COLUMN IF NOT EXISTS deletion_root_id TEXT REFERENCES units(id)")
+        conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified INTEGER NOT NULL DEFAULT 1")
+        conn.execute(
+            "ALTER TABLE expenses ADD COLUMN IF NOT EXISTS posting_order BIGINT GENERATED ALWAYS AS IDENTITY"
+        )
+        conn.execute(EXPENSE_REQUEST_INDEX)
 
 
 @contextmanager
 def transaction(conn):
+    if isinstance(conn, PostgresConnection):
+        with conn.transaction():
+            # The application reads before writing under SQLite's BEGIN IMMEDIATE.
+            # Retain that serialization for PostgreSQL-backed mutations.
+            conn.execute("SELECT pg_advisory_xact_lock(409971501667)")
+            yield
+        return
     conn.execute("BEGIN IMMEDIATE")
     try:
         yield

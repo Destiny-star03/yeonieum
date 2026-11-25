@@ -1,3 +1,22 @@
+.calendar-workspace,
+.cal-picker-popover,
+.cal-repeat-dialog {
+  font-size: calc(14px + 1pt);
+}
+:is(.calendar-workspace, .cal-picker-popover, .cal-repeat-dialog) :where(h2) {
+  font-size: calc(16px + 1pt);
+}
+:is(.calendar-workspace, .cal-picker-popover, .cal-repeat-dialog) :where(h3) {
+  font-size: calc(14px + 1pt);
+}
+:is(.calendar-workspace, .cal-picker-popover, .cal-repeat-dialog)
+  :where(label) {
+  font-size: calc(13px + 1pt);
+}
+:is(.calendar-workspace, .cal-picker-popover, .cal-repeat-dialog)
+  :where(small, .muted) {
+  font-size: calc(12px + 1pt);
+}
 .calendar-workspace {
   background: var(--panel);
   border: 1px solid var(--soft);
@@ -17,22 +36,22 @@
 .calendar-dialog-eyebrow {
   display: block;
   color: var(--muted);
-  font-size: 9px;
+  font-size: calc(9px + 1pt);
   letter-spacing: 1.4px;
   margin-bottom: 6px;
 }
 .calendar-title h2 {
-  font-size: 21px;
+  font-size: calc(21px + 1pt);
   font-weight: 750;
 }
 .calendar-title p {
   margin-top: 5px;
-  font-size: 11px;
+  font-size: calc(11px + 1pt);
   color: var(--muted);
 }
 .calendar-add {
   white-space: nowrap;
-  font-size: 12px;
+  font-size: calc(12px + 1pt);
   padding: 10px 15px;
 }
 .calendar-layout {
@@ -56,16 +75,16 @@
 }
 .calendar-today-card > span {
   color: var(--muted);
-  font-size: 9px;
+  font-size: calc(9px + 1pt);
   letter-spacing: 1.5px;
 }
 .calendar-today-card strong {
-  font-size: 32px;
+  font-size: calc(32px + 1pt);
   font-weight: 650;
   line-height: 1.2;
 }
 .calendar-today-card small {
-  font-size: 10px;
+  font-size: calc(10px + 1pt);
 }
 .calendar-scope-heading {
   display: flex;
@@ -74,32 +93,66 @@
   margin-bottom: 8px;
 }
 .calendar-scope-heading h3 {
-  font-size: 12px;
+  font-size: calc(12px + 1pt);
 }
 .calendar-scope-heading button {
-  font-size: 10px;
+  font-size: calc(10px + 1pt);
   padding: 3px;
 }
 .calendar-scope {
   display: flex;
-  flex-direction: row;
+  align-items: center;
+  gap: 2px;
+  padding: 1px 0;
+  font-size: calc(11px + 1pt);
+}
+.cal-icon {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+.cal-scope-color,
+.cal-scope-visibility {
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+}
+.cal-scope-color {
+  display: flex;
   align-items: center;
   gap: 7px;
-  padding: 7px 0;
-  font-size: 11px;
-  cursor: pointer;
+  flex: 1;
+  min-width: 0;
+  padding: 6px 3px;
+  text-align: left;
 }
-.calendar-scope > input {
-  width: 13px;
-  height: 13px;
-  min-height: 13px;
-  margin: 0;
+.cal-scope-color > span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.cal-scope-visibility {
+  display: grid;
+  place-items: center;
+  flex: 0 0 28px;
+  height: 28px;
   padding: 0;
-  accent-color: var(--muted);
-  flex-shrink: 0;
 }
-.calendar-scope > span {
-  overflow-wrap: anywhere;
+.cal-scope-visibility[aria-pressed="false"] .cal-icon {
+  opacity: 0.7;
+}
+.cal-scope-color:is(:hover, [aria-expanded="true"]),
+.cal-scope-visibility:hover {
+  background: var(--soft);
+}
+.cal-scope-swatch {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  flex: 0 0 12px;
+  border: 1px solid #0002;
+  border-radius: 4px;
 }
 .calendar-dot {
   display: inline-block;
@@ -127,15 +180,15 @@
   border-top: 1px solid var(--soft);
 }
 .calendar-selected > span {
-  font-size: 10px;
+  font-size: calc(10px + 1pt);
   color: var(--muted);
 }
 .calendar-selected h3 {
-  font-size: 12px;
+  font-size: calc(12px + 1pt);
   margin: 7px 0 12px;
 }
 .calendar-selected p {
-  font-size: 10px;
+  font-size: calc(10px + 1pt);
   color: var(--muted);
   padding: 10px 0 15px;
 }
@@ -164,15 +217,15 @@
 .calendar-selected li strong {
   display: block;
   overflow-wrap: anywhere;
-  font-size: 11px;
+  font-size: calc(11px + 1pt);
   font-weight: 600;
 }
 .calendar-selected li small {
   display: block;
-  font-size: 9px;
+  font-size: calc(9px + 1pt);
 }
 .calendar-day-create {
-  font-size: 10px;
+  font-size: calc(10px + 1pt);
   background: transparent;
   color: var(--muted);
   padding: 7px 0;
@@ -181,10 +234,10 @@
 .calendar-timezone {
   display: block;
   margin-top: 25px;
-  font-size: 9px;
+  font-size: calc(9px + 1pt);
 }
 .calendar-no-role {
-  font-size: 11px;
+  font-size: calc(11px + 1pt);
   color: var(--muted);
   line-height: 1.8;
 }
@@ -205,7 +258,7 @@
   gap: 17px;
 }
 .calendar-month-title h3 {
-  font-size: 19px;
+  font-size: calc(19px + 1pt);
   font-weight: 700;
   white-space: nowrap;
 }
@@ -219,12 +272,12 @@
   padding: 0;
   width: 25px;
   height: 30px;
-  font-size: 23px;
+  font-size: calc(23px + 1pt);
   color: var(--muted);
 }
 .calendar-today {
   padding: 6px 10px;
-  font-size: 11px;
+  font-size: calc(11px + 1pt);
   background: var(--panel);
   border-color: var(--soft);
   border-radius: 5px;
@@ -242,7 +295,7 @@
   color: var(--muted);
   border-radius: 4px;
   padding: 5px 10px;
-  font-size: 11px;
+  font-size: calc(11px + 1pt);
 }
 .calendar-view button[aria-pressed="true"] {
   background: var(--panel);
@@ -255,7 +308,7 @@
   border-top: 1px solid var(--soft);
 }
 .calendar-weekday {
-  font-size: 11px;
+  font-size: calc(11px + 1pt);
   text-align: center;
   padding: 10px 0;
   border-bottom: 1px solid var(--soft);
@@ -291,7 +344,7 @@
   border: 0;
   background: transparent;
   border-radius: 0;
-  font-size: 11px;
+  font-size: calc(11px + 1pt);
   font-weight: 500;
 }
 .calendar-day-top > span {
@@ -336,14 +389,14 @@
   line-height: 1.4;
 }
 .calendar-event strong {
-  font-size: 10px;
+  font-size: calc(10px + 1pt);
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
   font-weight: 550;
 }
 .calendar-event-time {
-  font-size: 8px;
+  font-size: calc(8px + 1pt);
   flex-shrink: 0;
   opacity: 0.8;
 }
@@ -383,18 +436,18 @@
   justify-content: space-between;
   gap: 15px;
   padding: 14px 20px;
-  font-size: 10px;
+  font-size: calc(10px + 1pt);
   color: var(--muted);
 }
 .calendar-bottom small {
-  font-size: 10px;
+  font-size: calc(10px + 1pt);
   white-space: nowrap;
 }
 .calendar-feedback {
   margin: 0 18px 15px;
 }
 .calendar-loading {
-  font-size: 11px;
+  font-size: calc(11px + 1pt);
   color: var(--muted);
   margin: 0 20px 12px;
 }
@@ -405,10 +458,10 @@
   margin-bottom: 0;
 }
 .calendar-dialog h2 {
-  font-size: 22px;
+  font-size: calc(22px + 1pt);
 }
 .calendar-dialog label {
-  font-size: 12px;
+  font-size: calc(12px + 1pt);
 }
 .calendar-dialog .calendar-check {
   display: flex;
@@ -441,13 +494,7 @@
   flex: 1;
 }
 .calendar-dialog-actions > button {
-  font-size: 12px;
-}
-.calendar-remove {
-  border: 0;
-  background: transparent;
-  color: #8b2f23;
-  padding-left: 0;
+  font-size: calc(12px + 1pt);
 }
 .calendar-delete-warning {
   background: #fff4f1;
@@ -457,10 +504,10 @@
   padding: 13px;
 }
 .calendar-delete-warning strong {
-  font-size: 13px;
+  font-size: calc(13px + 1pt);
 }
 .calendar-delete-warning p {
-  font-size: 11px;
+  font-size: calc(11px + 1pt);
   margin-top: 5px;
 }
 .calendar-delete-warning > div {
@@ -470,7 +517,7 @@
   margin-top: 10px;
 }
 .calendar-delete-warning button {
-  font-size: 11px;
+  font-size: calc(11px + 1pt);
 }
 @media (max-width: 1250px) {
   .calendar-layout {
@@ -523,14 +570,14 @@
     gap: 12px;
   }
   .calendar-title h2 {
-    font-size: 19px;
+    font-size: calc(19px + 1pt);
   }
   .calendar-title p {
     max-width: 190px;
-    font-size: 10px;
+    font-size: calc(10px + 1pt);
   }
   .calendar-add {
-    font-size: 10px;
+    font-size: calc(10px + 1pt);
     padding: 8px 9px;
   }
   .calendar-sidebar {
@@ -539,7 +586,7 @@
   }
   .calendar-scope-heading h3,
   .calendar-scope {
-    font-size: 10px;
+    font-size: calc(10px + 1pt);
   }
   .calendar-toolbar {
     padding: 14px 12px;
@@ -550,7 +597,7 @@
     gap: 7px;
   }
   .calendar-month-title h3 {
-    font-size: 16px;
+    font-size: calc(16px + 1pt);
   }
   .calendar-paging {
     gap: 0;
@@ -559,12 +606,12 @@
     width: 20px;
   }
   .calendar-today {
-    font-size: 10px;
+    font-size: calc(10px + 1pt);
     padding: 5px 7px;
   }
   .calendar-view button {
     padding: 4px 7px;
-    font-size: 10px;
+    font-size: calc(10px + 1pt);
   }
   .calendar-day {
     min-height: 86px;
@@ -572,7 +619,7 @@
   }
   .calendar-day-top {
     padding: 4px 3px;
-    font-size: 10px;
+    font-size: calc(10px + 1pt);
   }
   .calendar-day-top > span {
     min-width: 22px;
@@ -589,25 +636,25 @@
     padding: 4px 3px;
   }
   .calendar-event strong {
-    font-size: 8px;
+    font-size: calc(8px + 1pt);
   }
   .calendar-weekday {
-    font-size: 10px;
+    font-size: calc(10px + 1pt);
   }
   .calendar-bottom {
     padding: 12px;
     flex-direction: column;
     gap: 5px;
-    font-size: 9px;
+    font-size: calc(9px + 1pt);
   }
   .calendar-bottom small {
-    font-size: 9px;
+    font-size: calc(9px + 1pt);
   }
   .calendar-dialog {
     padding: 20px;
   }
   .calendar-dialog-actions > button {
-    font-size: 11px;
+    font-size: calc(11px + 1pt);
     padding: 9px;
   }
   .calendar-grid-week .calendar-day {
@@ -628,14 +675,14 @@
     padding: 18px 15px;
   }
   .calendar-mobile-agenda h3 {
-    font-size: 12px;
+    font-size: calc(12px + 1pt);
     display: flex;
     align-items: center;
     gap: 7px;
     margin-bottom: 10px;
   }
   .calendar-mobile-agenda h3 > span {
-    font-size: 10px;
+    font-size: calc(10px + 1pt);
     background: var(--canvas);
     padding: 2px 6px;
     border-radius: 4px;
@@ -668,16 +715,16 @@
   }
   .calendar-mobile-agenda strong {
     display: block;
-    font-size: 12px;
+    font-size: calc(12px + 1pt);
     overflow-wrap: anywhere;
   }
   .calendar-mobile-agenda small {
     display: block;
-    font-size: 10px;
+    font-size: calc(10px + 1pt);
     margin-top: 4px;
   }
   .calendar-mobile-agenda p {
-    font-size: 11px;
+    font-size: calc(11px + 1pt);
     color: var(--muted);
   }
 }
@@ -686,6 +733,9 @@
 .notion-calendar {
   --cal-side: 190px;
   --cal-context: 292px;
+  --cal-grid-date-size: 12px;
+  --cal-event-title-size: 12px;
+  --cal-event-time-size: 10px;
 }
 .notion-calendar.sidebar-hidden {
   --cal-side: 0px;
@@ -698,7 +748,7 @@
   min-height: 75px;
 }
 .notion-calendar .calendar-title h2 {
-  font-size: 20px;
+  font-size: calc(20px + 1pt);
 }
 .cal-header-tools {
   display: flex;
@@ -709,7 +759,7 @@
   background: transparent;
   border: 0;
   padding: 5px 8px;
-  font-size: 18px;
+  font-size: calc(18px + 1pt);
   color: var(--muted);
 }
 .notion-calendar .calendar-layout {
@@ -746,7 +796,7 @@
   margin-bottom: 13px;
 }
 .cal-mini strong {
-  font-size: 11px;
+  font-size: 13px;
   margin-right: auto;
 }
 .cal-mini > div:first-child > button {
@@ -754,7 +804,7 @@
   background: transparent;
   width: 21px;
   padding: 0;
-  font-size: 18px;
+  font-size: calc(18px + 1pt);
   color: var(--muted);
 }
 .cal-mini-grid {
@@ -765,7 +815,7 @@
 .cal-mini-grid > span {
   text-align: center;
   color: var(--muted);
-  font-size: 9px;
+  font-size: 11px;
   padding-bottom: 5px;
 }
 .cal-mini-grid > button {
@@ -774,7 +824,7 @@
   border-radius: 50%;
   padding: 0;
   height: 23px;
-  font-size: 10px;
+  font-size: var(--cal-grid-date-size);
   font-weight: 500;
 }
 .cal-mini-grid > button.is-outside {
@@ -797,10 +847,14 @@
   gap: 8px;
 }
 .cal-sidebar-selected > small {
-  font-size: 9px;
+  font-size: calc(9px + 1pt);
 }
 .cal-sidebar-selected > strong {
-  font-size: 11px;
+  font-size: 13px;
+}
+.notion-calendar .calendar-scope,
+.notion-calendar .calendar-scope-heading h3 {
+  font-size: 13px;
 }
 .notion-calendar .calendar-toolbar {
   min-height: 74px;
@@ -812,7 +866,7 @@
   gap: 9px;
 }
 .notion-calendar .calendar-month-title h3 {
-  font-size: 19px;
+  font-size: clamp(18px, 1.6vw, 22px);
 }
 .cal-toolbar-actions {
   display: flex;
@@ -823,7 +877,7 @@
   width: 55px;
   min-height: 29px;
   padding: 4px 7px;
-  font-size: 11px;
+  font-size: calc(11px + 1pt);
   background: var(--canvas);
   border-color: var(--soft);
 }
@@ -834,7 +888,7 @@
   list-style: none;
   cursor: pointer;
   padding: 5px 7px;
-  font-size: 17px;
+  font-size: calc(17px + 1pt);
   color: var(--muted);
 }
 .cal-view-settings > summary::-webkit-details-marker {
@@ -855,15 +909,15 @@
   gap: 12px;
 }
 .cal-view-settings label {
-  font-size: 11px;
+  font-size: calc(11px + 1pt);
 }
 .cal-view-settings select {
   min-height: 32px;
   padding: 6px 8px;
-  font-size: 11px;
+  font-size: calc(11px + 1pt);
 }
 .cal-view-settings > div > button {
-  font-size: 11px;
+  font-size: calc(11px + 1pt);
   padding: 7px;
 }
 .cal-tool-button {
@@ -873,7 +927,7 @@
   color: var(--muted);
   padding: 5px 6px;
   min-width: 25px;
-  font-size: 17px;
+  font-size: calc(17px + 1pt);
 }
 .cal-tool-button b {
   position: absolute;
@@ -884,14 +938,18 @@
   padding: 1px 3px;
   background: var(--ink);
   color: var(--canvas);
-  font-size: 8px;
+  font-size: calc(8px + 1pt);
 }
 .calendar-canvas {
   min-width: 0;
 }
 .notion-month {
+  --cal-week-height: 128px;
   min-width: 0;
   border-top: 1px solid var(--soft);
+}
+.notion-month.is-compact {
+  --cal-week-height: 92px;
 }
 .notion-month-weekdays {
   display: grid;
@@ -901,20 +959,34 @@
   padding: 10px 0;
   text-align: center;
   border-bottom: 1px solid var(--soft);
-  font-size: 10px;
+  font-size: var(--cal-grid-date-size);
   color: var(--muted);
 }
 .notion-month-week {
   position: relative;
+  height: var(--cal-week-height);
+}
+.notion-month-scroll {
+  height: calc(var(--cal-week-height) * 6);
+  overflow-y: auto;
+  overflow-x: hidden;
+  overflow-anchor: none;
+  overscroll-behavior-y: contain;
+  scrollbar-width: none;
+}
+.notion-month-scroll.is-dragging {
+  cursor: ns-resize;
+  user-select: none;
 }
 .notion-month-days {
   display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  height: 100%;
 }
 .notion-month .calendar-day {
-  min-height: 128px;
-}
-.notion-month.is-compact .calendar-day {
-  min-height: 92px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 .notion-month .calendar-day-top {
   position: absolute;
@@ -926,7 +998,7 @@
   min-width: 25px;
   width: auto;
   padding: 0 4px;
-  font-size: 10px;
+  font-size: var(--cal-grid-date-size);
 }
 .notion-month .calendar-day-top > span.is-today {
   border-radius: 5px;
@@ -951,10 +1023,8 @@
   padding: 2px 4px;
   border-radius: 4px;
 }
-.notion-month-bars .calendar-event strong {
-  font-size: 9px;
-}
 .notion-month .calendar-day-events {
+  min-height: 0;
   max-height: 150px;
   overflow-y: auto;
   padding: 0 3px;
@@ -975,10 +1045,11 @@
 }
 .notion-calendar .calendar-event-time {
   display: inline;
-  font-size: 8px;
+  font-size: var(--cal-event-time-size);
 }
 .notion-calendar .calendar-event strong {
-  font-size: 9px;
+  font-size: var(--cal-event-title-size);
+  line-height: 1.25;
 }
 .notion-calendar .calendar-tone-0 {
   --event-bg: #e6ded4;
@@ -1068,7 +1139,7 @@
 .cal-color-field {
   display: grid;
   gap: 6px;
-  font-size: 11px;
+  font-size: 13px;
 }
 .cal-color-trigger {
   display: flex;
@@ -1076,6 +1147,18 @@
   gap: 9px;
   width: 100%;
   text-align: left;
+  padding: 7px;
+  background: transparent;
+  border-color: transparent;
+}
+.cal-color-trigger:hover:not(:disabled),
+.cal-color-trigger[aria-expanded="true"] {
+  background: var(--canvas);
+}
+.cal-color-trigger > span:first-of-type {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .cal-color-trigger > span:last-child {
   margin-left: auto;
@@ -1095,7 +1178,7 @@
   border-radius: 14px;
 }
 .cal-color-org {
-  font-size: 11px;
+  font-size: calc(11px + 1pt);
   color: var(--muted);
   margin: 0 6px 9px;
   overflow-wrap: anywhere;
@@ -1108,7 +1191,7 @@
   background: var(--canvas);
   padding: 9px;
   border: 0;
-  font-size: 12px;
+  font-size: calc(12px + 1pt);
   text-align: left;
 }
 .cal-color-default > span:last-child {
@@ -1116,8 +1199,48 @@
 }
 .cal-color-caption {
   color: var(--muted);
-  font-size: 10px;
+  font-size: calc(10px + 1pt);
   margin: 14px 6px 6px;
+}
+.cal-dropdown-options {
+  padding-bottom: 6px;
+  margin-bottom: 6px;
+  border-bottom: 1px solid var(--soft);
+}
+.cal-dropdown-options > button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 33px;
+  padding: 6px 9px;
+  text-align: left;
+}
+.cal-dropdown-options > button > span {
+  width: 12px;
+  flex-shrink: 0;
+}
+.cal-dropdown-options > [aria-pressed="true"] {
+  background: var(--soft);
+}
+.cal-picker-popover.cal-scope-color-picker {
+  width: min(210px, calc(100vw - 16px));
+  padding: 6px;
+}
+.cal-scope-color-picker button[role="radio"] {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 30px;
+  padding: 5px 8px;
+  text-align: left;
+}
+.cal-scope-color-picker [aria-checked="true"] {
+  background: var(--soft);
+}
+.cal-scope-color-check {
+  margin-inline-start: auto;
 }
 .cal-color-swatches {
   display: grid;
@@ -1141,7 +1264,7 @@
   height: 20px;
   border-radius: 6px;
   border: 1px solid #0002;
-  font-size: 13px;
+  font-size: calc(13px + 1pt);
 }
 .cal-color-swatch.is-selected {
   border-color: var(--muted);
@@ -1155,14 +1278,14 @@
 }
 .cal-repeat-mark {
   margin-left: auto;
-  font-size: 10px;
+  font-size: calc(10px + 1pt);
   flex-shrink: 0;
 }
 .cal-week-number {
   position: absolute;
   top: 27px;
   left: 4px;
-  font-size: 7px;
+  font-size: calc(7px + 1pt);
   color: var(--muted);
   z-index: 2;
 }
@@ -1189,7 +1312,7 @@
   padding: 8px 4px;
 }
 .cal-time-head small {
-  font-size: 10px;
+  font-size: var(--cal-grid-date-size);
 }
 .cal-time-head strong {
   display: grid;
@@ -1198,7 +1321,7 @@
   font-weight: 600;
   width: 28px;
   height: 28px;
-  font-size: 17px;
+  font-size: calc(17px + 1pt);
 }
 .cal-time-head strong.is-today {
   background: var(--ink);
@@ -1207,7 +1330,7 @@
 .cal-time-zone-label {
   display: grid;
   place-items: center;
-  font-size: 8px;
+  font-size: calc(8px + 1pt);
   color: var(--muted);
 }
 .cal-all-day {
@@ -1217,7 +1340,7 @@
 }
 .cal-all-day > span {
   padding: 9px 3px;
-  font-size: 9px;
+  font-size: calc(9px + 1pt);
   color: var(--muted);
 }
 .cal-all-day > div {
@@ -1244,7 +1367,7 @@
 .cal-hour-labels > span {
   position: absolute;
   right: 4px;
-  font-size: 8px;
+  font-size: 10px;
   color: var(--muted);
   transform: translateY(-50%);
 }
@@ -1296,14 +1419,14 @@
   color: inherit;
 }
 .cal-timed-block strong {
-  font-size: 10px;
+  font-size: var(--cal-event-title-size);
   display: block;
   overflow-wrap: anywhere;
 }
 .cal-timed-block small {
   color: inherit;
   opacity: 0.85;
-  font-size: 8px;
+  font-size: var(--cal-event-time-size);
   display: block;
   margin-top: 3px;
 }
@@ -1371,20 +1494,20 @@
   padding: 6px 8px;
   border: 0;
   background: var(--canvas);
-  font-size: 11px;
+  font-size: 12px;
 }
 .cal-context-search button {
   border: 0;
   background: transparent;
   padding: 4px;
-  font-size: 11px;
+  font-size: calc(11px + 1pt);
   color: var(--muted);
 }
 .cal-shortcuts {
   padding: 23px 17px;
 }
 .cal-shortcuts h3 {
-  font-size: 12px;
+  font-size: calc(12px + 1pt);
   margin-bottom: 17px;
 }
 .cal-shortcuts > div {
@@ -1392,12 +1515,12 @@
   justify-content: space-between;
   gap: 10px;
   margin: 13px 0;
-  font-size: 10px;
+  font-size: calc(10px + 1pt);
   color: var(--muted);
 }
 .cal-shortcuts kbd,
 .cal-context-menu kbd {
-  font-size: 8px;
+  font-size: calc(8px + 1pt);
   background: var(--soft);
   color: var(--muted);
   padding: 2px 4px;
@@ -1405,7 +1528,7 @@
   white-space: nowrap;
 }
 .cal-shortcuts p {
-  font-size: 9px;
+  font-size: calc(9px + 1pt);
   color: var(--muted);
   border-top: 1px solid var(--soft);
   padding-top: 16px;
@@ -1416,7 +1539,7 @@
   min-width: 0;
 }
 .notion-event-editor form {
-  gap: 13px;
+  gap: 10px;
 }
 .cal-editor-heading {
   display: flex;
@@ -1441,7 +1564,7 @@
 .cal-event-menu summary {
   cursor: pointer;
   list-style: none;
-  font-size: 20px;
+  font-size: calc(20px + 1pt);
   padding: 0 6px;
 }
 .cal-event-menu > div {
@@ -1463,39 +1586,28 @@
   background: transparent;
   border: 0;
   text-align: left;
-  font-size: 11px;
+  font-size: calc(11px + 1pt);
 }
 .cal-editor-title {
-  font-size: 17px;
   font-weight: 650;
   background: var(--canvas);
   border: 0;
-  padding: 10px;
-  min-height: 42px;
 }
 .cal-editor-note {
-  font-size: 10px;
+  font-size: calc(10px + 1pt);
   color: var(--muted);
-  background: var(--canvas);
-  border-radius: 5px;
-  padding: 8px;
+  padding: 0 2px;
 }
-.cal-editor-section {
+.cal-editor-period {
   display: grid;
-  gap: 12px;
+  gap: 4px;
   margin: 0;
-  padding: 13px 0 0;
+  padding: 0;
   border: 0;
-  border-top: 1px solid var(--soft);
   min-width: 0;
 }
-.cal-editor-section legend {
-  font-size: 10px;
-  color: var(--muted);
-  padding: 0 6px 0 0;
-}
 .notion-event-editor label {
-  font-size: 11px;
+  font-size: 13px;
   gap: 6px;
 }
 .notion-event-editor select,
@@ -1503,11 +1615,15 @@
 .notion-event-editor textarea {
   min-height: 33px;
   padding: 7px 8px;
-  font-size: 11px;
+  font-size: 13px;
   min-width: 0;
 }
 .notion-event-editor textarea {
   min-height: 90px;
+}
+.notion-event-editor input.cal-editor-title {
+  min-height: 40px;
+  font-size: 14px;
 }
 .notion-event-editor .calendar-date-inputs {
   gap: 9px;
@@ -1532,10 +1648,11 @@
 .cal-period-arrow {
   color: var(--muted);
   flex-shrink: 0;
-  font-size: 15px;
+  font-size: calc(15px + 1pt);
 }
 .cal-period-clock {
   width: 16px;
+  display: flex;
 }
 .notion-event-editor input.cal-time-input[type="text"] {
   width: 49px;
@@ -1545,7 +1662,7 @@
   border: 1px solid transparent;
   border-radius: 6px;
   background: transparent;
-  font-size: 12px;
+  font-size: 13px;
   font-variant-numeric: tabular-nums;
 }
 .notion-event-editor .cal-time-input:hover:not(:disabled),
@@ -1555,12 +1672,12 @@
 }
 .cal-period-duration {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.4;
   min-width: 0;
 }
-.cal-period.is-all-day .cal-period-times {
-  opacity: 0.4;
+.cal-period-times[hidden] {
+  display: none;
 }
 .cal-period-dates {
   display: grid;
@@ -1574,7 +1691,7 @@
   border-radius: 7px;
   background: transparent;
   padding: 6px 3px;
-  font-size: 11px;
+  font-size: 13px;
   white-space: nowrap;
   text-align: left;
   min-width: 0;
@@ -1597,7 +1714,7 @@
   border-radius: 6px;
   background: transparent;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 .cal-time-settings-toggle:hover:not(:disabled),
 .cal-time-settings-toggle:focus-visible {
@@ -1672,10 +1789,6 @@
   align-items: center;
   gap: 7px;
 }
-.notion-event-editor .cal-period-zone > span {
-  color: var(--muted);
-  font-size: 17px;
-}
 .notion-event-editor .cal-period-zone select {
   width: auto;
   min-height: 27px;
@@ -1687,12 +1800,12 @@
   display: grid;
   align-content: start;
   gap: 6px;
-  font-size: 11px;
+  font-size: calc(11px + 1pt);
 }
 .cal-repeat-field {
   display: grid;
   gap: 6px;
-  font-size: 11px;
+  font-size: calc(11px + 1pt);
 }
 .cal-repeat-trigger {
   display: flex;
@@ -1716,11 +1829,15 @@
   text-align: left;
   width: 100%;
   padding: 9px 10px;
-  font-size: 12px;
+  font-size: calc(12px + 1pt);
 }
-.cal-repeat-picker [role="menu"] > button > span {
+.cal-repeat-picker .cal-repeat-option-check {
   width: 15px;
   flex-shrink: 0;
+}
+.cal-repeat-option-detail {
+  color: var(--muted);
+  font-weight: 500;
 }
 .cal-repeat-picker [aria-checked="true"] {
   background: var(--soft);
@@ -1750,7 +1867,7 @@
   gap: 20px;
 }
 .cal-repeat-dialog h2 {
-  font-size: 18px;
+  font-size: calc(18px + 1pt);
   margin: 0;
 }
 .cal-repeat-interval {
@@ -1758,13 +1875,13 @@
   grid-template-columns: 70px 110px auto;
   align-items: center;
   gap: 9px;
-  font-size: 12px;
+  font-size: calc(12px + 1pt);
 }
 .cal-repeat-weekdays {
   display: flex;
   gap: 6px;
   align-items: center;
-  font-size: 12px;
+  font-size: calc(12px + 1pt);
 }
 .cal-repeat-weekdays button {
   display: grid;
@@ -1775,7 +1892,7 @@
   border: 1px solid var(--soft);
   border-radius: 50%;
   background: var(--canvas);
-  font-size: 12px;
+  font-size: calc(12px + 1pt);
 }
 .cal-repeat-weekdays button[aria-pressed="true"] {
   background: var(--muted);
@@ -1788,7 +1905,7 @@
   margin: 0;
   display: grid;
   gap: 17px;
-  font-size: 12px;
+  font-size: calc(12px + 1pt);
 }
 .cal-repeat-ending legend {
   padding-bottom: 15px;
@@ -1818,7 +1935,7 @@
 .cal-repeat-ending .cal-date-trigger {
   min-width: 0;
   max-width: 190px;
-  font-size: 12px;
+  font-size: calc(12px + 1pt);
 }
 .cal-repeat-dialog-actions {
   display: flex;
@@ -1845,7 +1962,7 @@
   gap: 13px;
 }
 .cal-external-sources h3 {
-  font-size: 12px;
+  font-size: calc(12px + 1pt);
   margin: 0;
 }
 .cal-external-sources > div {
@@ -1857,7 +1974,7 @@
   flex-direction: row;
   align-items: center;
   gap: 7px;
-  font-size: 11px;
+  font-size: calc(11px + 1pt);
   margin: 0;
 }
 .cal-external-sources .calendar-dot {
@@ -1865,7 +1982,7 @@
 }
 .cal-external-sources small,
 .cal-external-sources a {
-  font-size: 10px;
+  font-size: calc(10px + 1pt);
   line-height: 1.5;
   color: var(--muted);
 }
@@ -1884,16 +2001,16 @@
   gap: 18px;
 }
 .cal-external-detail h2 {
-  font-size: 18px;
+  font-size: calc(18px + 1pt);
   overflow-wrap: anywhere;
 }
 .cal-external-detail p,
 .cal-external-detail a {
-  font-size: 12px;
+  font-size: calc(12px + 1pt);
   line-height: 1.7;
 }
 .cal-external-detail .cal-external-badge {
-  font-size: 10px;
+  font-size: calc(10px + 1pt);
   color: var(--muted);
 }
 .cal-picker-popover {
@@ -1909,13 +2026,13 @@
   background: var(--panel);
   color: var(--ink);
   box-shadow: 0 8px 30px #1f1d1b20;
-  font-size: 12px;
+  font-size: calc(12px + 1pt);
 }
 .cal-picker-popover button {
   border: 0;
   background: transparent;
   color: inherit;
-  font-size: 12px;
+  font-size: calc(12px + 1pt);
   border-radius: 8px;
   padding: 0;
 }
@@ -1935,7 +2052,7 @@
 .cal-date-picker header button {
   width: 27px;
   height: 27px;
-  font-size: 20px;
+  font-size: calc(20px + 1pt);
   color: var(--muted);
 }
 .cal-picker-weekdays,
@@ -1948,7 +2065,7 @@
 .cal-picker-weekdays {
   margin-bottom: 5px;
   color: var(--muted);
-  font-size: 10px;
+  font-size: calc(10px + 1pt);
 }
 .cal-picker-weekdays span {
   padding: 4px 0;
@@ -1983,7 +2100,7 @@
 .cal-date-picker footer button {
   padding: 5px 7px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: calc(11px + 1pt);
 }
 .cal-time-picker {
   width: min(224px, calc(100vw - 16px));
@@ -2007,32 +2124,136 @@
 }
 .cal-time-picker button > span + span {
   color: var(--muted);
-  font-size: 11px;
+  font-size: calc(11px + 1pt);
 }
 .cal-time-picker .is-active,
 .cal-time-picker button[aria-selected="true"] {
   background: var(--canvas);
 }
 .notion-event-editor small {
-  font-size: 9px;
+  font-size: calc(9px + 1pt);
   line-height: 1.7;
 }
 .cal-inline-action {
   text-align: left;
   border: 0;
   background: transparent;
-  font-size: 10px;
+  font-size: calc(10px + 1pt);
   color: var(--muted);
   padding: 5px 0;
 }
-.cal-editor-disclosure summary {
-  cursor: pointer;
-  color: var(--muted);
-  font-size: 11px;
-  padding: 4px 0;
+.cal-editor-rows {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
 }
-.cal-editor-disclosure input:not([type="checkbox"]) {
-  margin: 8px 0;
+.notion-event-editor .cal-editor-inline-row {
+  width: 100%;
+  min-width: 0;
+  min-height: 34px;
+  padding: 6px 7px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  font-size: 13px;
+  font-weight: 550;
+  line-height: 1.5;
+  text-align: left;
+}
+.notion-event-editor :is(input, textarea).cal-editor-inline-row {
+  min-height: 34px;
+  padding: 6px 7px;
+  border-color: transparent;
+  background: transparent;
+}
+.cal-editor-inline-row::placeholder {
+  color: var(--muted);
+  opacity: 1;
+}
+.notion-event-editor
+  .cal-editor-inline-row:is(:hover, :focus, [aria-expanded="true"]) {
+  background: var(--canvas);
+}
+.notion-event-editor .cal-editor-inline-row:focus-visible {
+  outline: 2px solid var(--muted);
+  outline-offset: -2px;
+}
+.cal-editor-icon-row {
+  position: relative;
+  min-width: 0;
+}
+.cal-editor-icon-row > .cal-icon {
+  position: absolute;
+  inset: 10px auto auto 7px;
+  pointer-events: none;
+}
+.notion-event-editor .cal-editor-icon-row > .cal-editor-inline-row {
+  padding-inline-start: 29px;
+}
+.notion-event-editor .cal-editor-inline-description {
+  height: 34px;
+  resize: none;
+}
+.notion-event-editor .cal-editor-inline-description:focus {
+  min-height: 76px;
+  resize: vertical;
+}
+button.cal-editor-inline-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.cal-editor-row-value {
+  min-width: 0;
+  color: var(--muted);
+  font-weight: 400;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cal-editor-calendar,
+.cal-editor-popup-content {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  border: 0;
+  margin: 0;
+  padding: 0;
+  font-size: calc(11px + 1pt);
+}
+.cal-editor-calendar {
+  gap: 4px;
+}
+.cal-editor-calendar .calendar-date-inputs {
+  padding-inline: 7px;
+}
+.cal-editor-calendar select {
+  background: transparent;
+  border-color: transparent;
+}
+.cal-editor-calendar select:is(:hover, :focus, :open) {
+  background: var(--canvas);
+}
+.cal-editor-calendar small {
+  padding-inline: 7px;
+}
+.cal-picker-popover.cal-editor-popup {
+  width: min(290px, calc(100vw - 16px));
+}
+.cal-editor-popup .cal-inline-action {
+  min-height: 33px;
+  padding: 6px 9px;
+  background: var(--canvas);
+}
+.cal-editor-popup :is(input:not([type="checkbox"]), select) {
+  min-height: 33px;
+  min-width: 0;
+  padding: 6px 8px;
+}
+.cal-editor-popup .calendar-check {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
 }
 .cal-option-list {
   display: grid;
@@ -2042,7 +2263,7 @@
   padding: 8px 0;
 }
 .cal-option-list label {
-  font-size: 10px;
+  font-size: calc(10px + 1pt);
   font-weight: 400;
 }
 .cal-link-row {
@@ -2056,12 +2277,12 @@
   border: 0;
   background: transparent;
   color: var(--muted);
-  font-size: 10px;
+  font-size: calc(10px + 1pt);
 }
 .cal-editor-links {
   display: grid;
   gap: 6px;
-  font-size: 10px;
+  font-size: calc(10px + 1pt);
 }
 .cal-editor-links a {
   display: block;
@@ -2077,33 +2298,29 @@
 .cal-reminder-row select {
   flex: 1;
 }
-.cal-readonly-value {
-  font-size: 11px;
-}
 .notion-event-editor .calendar-dialog-actions {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 7px;
-  padding: 13px 0 0;
-  border-top: 1px solid var(--soft);
+  padding: 8px 0 0;
   position: sticky;
   bottom: 0;
   background: var(--panel);
 }
 .notion-event-editor .calendar-dialog-actions button {
-  font-size: 10px;
+  font-size: calc(10px + 1pt);
   padding: 8px;
 }
 .cal-search-results {
   padding: 18px 14px;
 }
 .cal-search-results h3 {
-  font-size: 12px;
+  font-size: calc(12px + 1pt);
   margin-bottom: 12px;
 }
 .cal-search-results p {
-  font-size: 11px;
+  font-size: calc(11px + 1pt);
   color: var(--muted);
 }
 .cal-search-results > button {
@@ -2118,12 +2335,12 @@
 }
 .cal-search-results strong {
   display: block;
-  font-size: 11px;
+  font-size: calc(11px + 1pt);
   overflow-wrap: anywhere;
 }
 .cal-search-results small {
   display: block;
-  font-size: 9px;
+  font-size: calc(9px + 1pt);
   margin-top: 5px;
 }
 .cal-context-menu {
@@ -2144,7 +2361,7 @@
   border: 0;
   background: transparent;
   padding: 10px 8px;
-  font-size: 11px;
+  font-size: calc(11px + 1pt);
   text-align: left;
 }
 .cal-context-menu > button:hover {
@@ -2168,12 +2385,12 @@
   box-shadow: 0 8px 25px #1f1d1b18;
 }
 .cal-reminder-popover h3 {
-  font-size: 12px;
+  font-size: calc(12px + 1pt);
   margin-bottom: 15px;
 }
 .cal-reminder-popover p,
 .cal-reminder-popover > small {
-  font-size: 10px;
+  font-size: calc(10px + 1pt);
   color: var(--muted);
 }
 .cal-reminder-popover > div {
@@ -2192,15 +2409,15 @@
 }
 .cal-reminder-popover strong {
   display: block;
-  font-size: 11px;
+  font-size: calc(11px + 1pt);
 }
 .cal-reminder-popover small {
   display: block;
-  font-size: 9px;
+  font-size: calc(9px + 1pt);
   margin-top: 4px;
 }
 .cal-reminder-popover > div > button:last-child {
-  font-size: 10px;
+  font-size: calc(10px + 1pt);
   padding: 5px 7px;
 }
 .cal-command-dialog {
@@ -2214,7 +2431,7 @@
   margin-bottom: 16px;
 }
 .cal-command-head h2 {
-  font-size: 17px;
+  font-size: calc(17px + 1pt);
 }
 .cal-command-head button {
   border: 0;
@@ -2233,25 +2450,114 @@
   width: 100%;
   text-align: left;
   padding: 12px 5px;
-  font-size: 12px;
+  font-size: calc(12px + 1pt);
 }
 .cal-command-dialog kbd {
   background: var(--canvas);
   border: 1px solid var(--soft);
   border-radius: 4px;
   padding: 3px 6px;
-  font-size: 10px;
+  font-size: calc(10px + 1pt);
 }
 .cal-jump-dialog {
   width: min(360px, calc(100% - 26px));
 }
 .cal-jump-dialog h2 {
-  font-size: 18px;
+  font-size: calc(18px + 1pt);
 }
 .cal-jump-dialog form > div {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+.cal-repeat-change-dialog {
+  width: min(440px, calc(100% - 24px));
+  max-height: calc(100dvh - 24px);
+  margin: auto;
+  padding: clamp(16px, 5vw, 24px);
+  box-shadow: 0 15px 60px #1f1d1b33;
+}
+.cal-repeat-change-dialog h2 {
+  margin: 0;
+  font-size: calc(18px + 1pt);
+  overflow-wrap: anywhere;
+}
+.cal-repeat-change-dialog form {
+  gap: 16px;
+}
+.cal-repeat-change-dialog .cal-repeat-change-error {
+  margin: 0;
+  color: #982c23;
+  font-size: calc(12px + 1pt);
+}
+.cal-repeat-change-scopes {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  border: 0;
+  padding: 0;
+  margin: 0;
+}
+.cal-repeat-change-scopes label {
+  flex-direction: row;
+  align-items: center;
+  font-size: calc(12px + 1pt);
+}
+.cal-repeat-change-scopes input {
+  width: 16px;
+  height: 16px;
+  min-height: 0;
+  flex: 0 0 auto;
+  padding: 0;
+  margin: 0;
+  accent-color: #245d97;
+}
+.cal-repeat-change-times {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 8px 12px;
+  margin: 0;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+  font-size: calc(12px + 1pt);
+}
+.cal-repeat-change-times dt,
+.cal-repeat-change-times s {
+  color: var(--muted);
+}
+.cal-repeat-change-times dd {
+  margin: 0;
+}
+.cal-pending-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  flex: 0 0 6px;
+  vertical-align: middle;
+  border-radius: 50%;
+  background: #9ddcf2;
+  box-shadow: 0 0 0 1px #245d97;
+}
+.cal-timed-block .cal-pending-dot,
+.calendar-mobile-agenda .cal-pending-dot {
+  margin-inline-end: 5px;
+}
+.cal-repeat-change-actions {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.cal-repeat-change-actions button {
+  padding: 7px 9px;
+  font-size: calc(11px + 1pt);
+}
+.cal-repeat-change-actions .cal-repeat-change-cancel {
+  margin-right: auto;
+  color: #982c23;
+}
+.cal-repeat-change-actions .primary {
+  border-color: #245d97;
+  background: #245d97;
+  color: #fff;
 }
 .notion-calendar.is-expanded {
   position: fixed;
@@ -2293,14 +2599,16 @@
   display: flex;
   flex-direction: column;
 }
-.notion-calendar.is-expanded .notion-month-week {
+.notion-calendar.is-expanded .notion-month-weekdays {
+  flex-shrink: 0;
+}
+.notion-calendar.is-expanded .notion-month-scroll {
   flex: 1;
-  min-height: 90px;
+  height: auto;
+  min-height: 0;
 }
-.notion-calendar.is-expanded .notion-month-days {
-  height: 100%;
-}
-.notion-calendar.is-expanded .notion-month .calendar-day {
+.notion-calendar.is-expanded .notion-month-week {
+  height: calc(100% / 6);
   min-height: 90px;
 }
 .notion-calendar.is-expanded .cal-time-scroll {
@@ -2320,14 +2628,11 @@
   .notion-calendar.context-hidden {
     --cal-context: 0px;
   }
-  .notion-calendar .calendar-month-title h3 {
-    font-size: 16px;
-  }
   .notion-calendar .calendar-toolbar {
     padding: 13px;
   }
-  .notion-month .calendar-day {
-    min-height: 122px;
+  .notion-month {
+    --cal-week-height: 122px;
   }
 }
 @media (max-width: 1100px) {
@@ -2370,6 +2675,10 @@
   }
 }
 @media (max-width: 700px) {
+  .notion-calendar {
+    --cal-grid-date-size: 11px;
+    --cal-event-title-size: 11px;
+  }
   .notion-calendar .calendar-header {
     padding: 16px 13px;
     min-height: 65px;
@@ -2379,11 +2688,11 @@
     gap: 3px;
   }
   .cal-header-tools > button:not(.primary) {
-    font-size: 16px;
+    font-size: calc(16px + 1pt);
     padding: 4px;
   }
   .notion-calendar .calendar-title h2 {
-    font-size: 18px;
+    font-size: calc(18px + 1pt);
   }
   .notion-calendar .calendar-layout {
     display: flex;
@@ -2417,31 +2726,26 @@
     gap: 3px;
   }
   .notion-calendar .calendar-month-title h3 {
-    font-size: 15px;
+    font-size: 18px;
   }
   .cal-toolbar-actions {
     gap: 1px;
   }
   .cal-tool-button {
-    font-size: 16px;
+    font-size: calc(16px + 1pt);
     padding: 4px;
   }
   .cal-toolbar-actions > select {
     width: 48px;
   }
-  .notion-month .calendar-day {
-    min-height: 96px;
+  .notion-month {
+    --cal-week-height: 96px;
   }
   .notion-month .calendar-day-top {
     padding: 3px 2px;
   }
   .notion-month .calendar-day-top > span {
     min-width: 22px;
-    font-size: 9px;
-  }
-  .notion-month .calendar-event strong,
-  .notion-month-bars .calendar-event strong {
-    font-size: 8px;
   }
   .notion-month .calendar-event-time {
     display: none;

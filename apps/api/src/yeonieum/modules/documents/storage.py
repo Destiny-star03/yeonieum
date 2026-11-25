@@ -26,7 +26,7 @@ def checksum(path):
         return hashlib.file_digest(source, "sha256").hexdigest()
 
 
-def validate_content(path, filename):
+def validate_content(path, filename, *, max_unpacked=100 * 1024 * 1024):
     suffix = Path(filename).suffix.lower()
     with path.open("rb") as source:
         head = source.read(16)
@@ -57,7 +57,7 @@ def validate_content(path, filename):
                 entries = archive.infolist()
                 if (
                     len(entries) > 10000
-                    or sum(i.file_size for i in entries) > 100 * 1024 * 1024
+                    or sum(i.file_size for i in entries) > max_unpacked
                     or any(i.flag_bits & 1 for i in entries)
                     or required not in archive.namelist()
                     or any("vbaproject" in i.filename.lower() for i in entries)

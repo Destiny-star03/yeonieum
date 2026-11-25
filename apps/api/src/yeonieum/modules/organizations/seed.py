@@ -11,17 +11,17 @@ DEMO_PASSWORD = "Yeonieum-demo-2026!"
 
 
 def seed(conn):
-    conn.execute(
-        "INSERT OR IGNORE INTO units (id,org_id,parent_id,kind,name) VALUES ('monitoring','monitoring',NULL,'organization','모니터링단')"
-    )
-    if conn.execute("SELECT count(*) FROM users").fetchone()[0]:
-        seed_roles(conn)
-        return
-    hashed = PasswordHash.recommended().hash(DEMO_PASSWORD)
-    year = datetime.now(timezone.utc).year
-    start = stamp(datetime(year, 1, 1, tzinfo=timezone.utc))
-    stop = stamp(datetime(year + 1, 1, 1, tzinfo=timezone.utc))
     with transaction(conn):
+        conn.execute(
+            "INSERT INTO units (id,org_id,parent_id,kind,name) VALUES ('monitoring','monitoring',NULL,'organization','모니터링단') ON CONFLICT DO NOTHING"
+        )
+        if conn.execute("SELECT count(*) FROM users").fetchone()[0]:
+            seed_roles(conn)
+            return
+        hashed = PasswordHash.recommended().hash(DEMO_PASSWORD)
+        year = datetime.now(timezone.utc).year
+        start = stamp(datetime(year, 1, 1, tzinfo=timezone.utc))
+        stop = stamp(datetime(year + 1, 1, 1, tzinfo=timezone.utc))
         for ident, name in [
             ("council", "학과협의회"),
             ("student", "총학생회"),
@@ -95,4 +95,4 @@ def seed(conn):
                 ),
             )
 
-    seed_roles(conn)
+        seed_roles(conn)

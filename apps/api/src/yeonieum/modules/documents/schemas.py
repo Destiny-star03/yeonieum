@@ -4,7 +4,7 @@ from pydantic import Field, field_validator
 
 from yeonieum.modules.access.schemas import StrictModel
 
-MAX_FILE_SIZE = 50 * 1024 * 1024
+MAX_FILE_SIZE = 200 * 1024 * 1024
 
 
 class Metadata(StrictModel):
@@ -51,6 +51,10 @@ class Update(StrictModel):
 
 class Change(StrictModel):
     expected_revision: int = Field(ge=1)
+
+
+class Move(Change):
+    folder_id: str | None = Field(min_length=1, max_length=100)
 
 
 class RestoreVersion(Change):

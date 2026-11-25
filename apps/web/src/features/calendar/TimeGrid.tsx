@@ -1,6 +1,6 @@
 import { useEffect, useRef, type CSSProperties } from "react";
-import type { CalendarEvent, CalendarPreferences, Draft } from "./api";
-import EventChip, { beginEventDrag } from "./EventChip";
+import type { CalendarPreferences, DisplayedCalendarEvent, Draft } from "./api";
+import EventChip, { beginEventDrag, eventActionLabel } from "./EventChip";
 import {
   atMidnight,
   dayOf,
@@ -15,16 +15,24 @@ import {
 type Props = {
   days: string[];
   today: string;
-  events: CalendarEvent[];
+  events: DisplayedCalendarEvent[];
   preferences: CalendarPreferences;
   onAdd: (draft: Draft) => void;
-  onOpen: (event: CalendarEvent) => void;
-  onContext: (e: React.MouseEvent, day: string, event?: CalendarEvent) => void;
+  onOpen: (event: DisplayedCalendarEvent) => void;
+  onContext: (
+    e: React.MouseEvent,
+    day: string,
+    event?: DisplayedCalendarEvent,
+  ) => void;
   onDrop: (e: React.DragEvent, day: string, minute?: number) => void;
   label: string;
 };
 const scale = 52 / 60;
-function positioned(events: CalendarEvent[], day: string, zone: string) {
+function positioned(
+  events: DisplayedCalendarEvent[],
+  day: string,
+  zone: string,
+) {
   const start = Date.parse(atMidnight(day, zone));
   const rows = events
     .filter((e) => !e.all_day && overlapsDay(e, day, zone))
@@ -234,7 +242,7 @@ export default function TimeGrid({
               {positioned(events, day, preferences.zone).map(
                 ({ event, start, end, lane, count }) => (
                   <div
-                    className={`cal-timed-block calendar-tone-${tone(event.org_id)} cal-color-${event.color || "default"} ${event.availability === "free" ? "is-free" : ""} ${end - start < 45 ? "is-short" : ""}`}
+                    className={`cal-timed-block calendar-tone-${tone(event.displayCalendar?.org_id || event.org_id)} cal-color-${event.displayColor || event.color || "default"} ${event.availability === "free" ? "is-free" : ""} ${end - start < 45 ? "is-short" : ""}`}
                     key={eventKey(event)}
                     style={{
                       top: start * scale,
@@ -244,7 +252,8 @@ export default function TimeGrid({
                     }}
                   >
                     <button
-                      aria-label={`${event.title} 일정 열기 · ${day}`}
+                      aria-label={eventActionLabel(event, day)}
+                      data-pending-move={event.pendingMove}
                       title={`${event.title} · ${localFields(event.starts_at, preferences.zone).time}–${localFields(event.ends_at, preferences.zone).time}`}
                       draggable={event.can_edit}
                       onDragStart={(e) => beginEventDrag(e, event)}
@@ -252,6 +261,9 @@ export default function TimeGrid({
                       onClick={() => onOpen(event)}
                     >
                       <strong>
+                        {event.pendingMove && (
+                          <i className="cal-pending-dot" aria-hidden="true" />
+                        )}
                         {event.title}
                         {event.recurrence ? " ↻" : ""}
                       </strong>

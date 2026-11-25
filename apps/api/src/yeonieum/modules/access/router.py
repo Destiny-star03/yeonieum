@@ -10,6 +10,7 @@ from fastapi import Depends, HTTPException, Request, Response
 from pwdlib import PasswordHash
 
 from yeonieum.core.database import audit, connect, stamp, transaction
+from yeonieum.core.postgres import PostgresDatabase
 from yeonieum.modules.access.audiences import sharing_groups
 from yeonieum.modules.access.catalog import ROLE_LABELS, SCOPE_LABELS, allowed_scope_kinds
 from yeonieum.modules.access.invitations import install_invitation_routes, issue_invitation
@@ -58,6 +59,10 @@ def install_routes(app, database, now):
 
     @app.get("/api/health")
     def health():
+        if isinstance(database, PostgresDatabase):
+            with database.connect() as conn:
+                conn.execute("SELECT 1")
+            return {"status": "ok", "mode": "local-demo", "database": "postgresql"}
         return {"status": "ok", "mode": "local-demo"}
 
     @app.post("/api/auth/login")
@@ -401,7 +406,10 @@ def install_routes(app, database, now):
                 ),
             )
             if route_affiliation and target["id"] != target["org_id"]:
-                conn.execute("INSERT OR IGNORE INTO memberships VALUES (?,?)", (data.user_id, target["id"]))
+                conn.execute(
+                    "INSERT INTO memberships VALUES (?,?) ON CONFLICT DO NOTHING",
+                    (data.user_id, target["id"]),
+                )
                 conn.execute(
                     "DELETE FROM memberships WHERE user_id=? AND unit_id=?", (data.user_id, target["org_id"])
                 )

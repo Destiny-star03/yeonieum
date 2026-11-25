@@ -1,9 +1,14 @@
 import hashlib
+import os
 import sqlite3
 from datetime import datetime, timedelta, timezone
+from io import BytesIO
+from pathlib import Path
+from zipfile import ZipFile
 
 import pytest
 from fastapi.testclient import TestClient
+from PIL import Image
 
 from yeonieum.core.database import connect
 from yeonieum.main import create_app
@@ -99,6 +104,129 @@ def test_upload_version_restore_download_and_restart(library):
             ]
             == 3
         )
+
+
+def test_preview_shows_image_and_first_page_from_pdf_and_hwpx(library):
+    client, _, _, _ = library
+    first = Image.new("RGB", (1000, 600), "red")
+    second = Image.new("RGB", (600, 1000), "blue")
+    png, pdf, hwpx = BytesIO(), BytesIO(), BytesIO()
+    first.save(png, "PNG")
+    first.save(pdf, "PDF", save_all=True, append_images=[second])
+    with ZipFile(hwpx, "w") as archive:
+        archive.writestr("Contents/content.hpf", "<package/>")
+        archive.writestr("Preview/PrvImage.png", png.getvalue())
+    for filename, file in [("poster.png", png), ("report.pdf", pdf), ("report.hwpx", hwpx)]:
+        ident = upload(client, file.getvalue(), filename=filename)
+        response = client.get(f"/api/documents/{ident}/versions/1/preview")
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "image/jpeg"
+        assert response.headers["cache-control"] == "no-store"
+        with Image.open(BytesIO(response.content)) as preview:
+            assert preview.size == (480, 288)
+            red, green, blue = preview.getpixel((240, 144))
+            assert red > 220 and green < 20 and blue < 20
+
+
+def test_preview_follows_version_and_current_read_access(library):
+    client, _, _, _ = library
+    ident = upload(client, "첫 줄\n둘째 줄".encode(), metadata=metadata(audience="private"))
+    url = f"/api/documents/{ident}/versions"
+    response = client.get(f"{url}/1/preview")
+    assert response.text == "첫 줄\n둘째 줄"
+    assert response.headers["content-type"].startswith("text/plain")
+    upload(client, b"replacement", metadata=None, document_id=ident, expected_revision=1)
+    assert client.get(f"{url}/1/preview").status_code == 404
+    assert client.get(f"{url}/2/preview").text == "replacement"
+    sign_in(client, "student-vice")
+    assert client.get(f"{url}/2/preview").status_code == 404
+    sign_in(client)
+    assert client.post(f"/api/documents/{ident}/trash", json={"expected_revision": 2}).status_code == 200
+    assert client.get(f"{url}/2/preview").status_code == 404
+
+    missing = upload(client, b"%PDF-cannot-render", filename="damaged.pdf")
+    assert client.get(f"/api/documents/{missing}/versions/1/preview").status_code == 204
+
+
+def test_reader_renders_next_pdf_page_and_reuses_local_print_pdf(library, monkeypatch):
+    client, db, _, _ = library
+    first = Image.new("RGB", (250, 350), "red")
+    second = Image.new("RGB", (350, 250), "blue")
+    pdf = BytesIO()
+    first.save(pdf, "PDF", save_all=True, append_images=[second])
+    ident = upload(client, pdf.getvalue(), filename="report.pdf", metadata=metadata(audience="private"))
+    reader = f"/api/documents/{ident}/versions/1/read"
+    assert client.get(reader).json() == {"kind": "pages", "page_count": 2}
+    response = client.get(f"{reader}/pages/2")
+    assert response.headers["cache-control"] == "no-store"
+    with Image.open(BytesIO(response.content)) as page:
+        assert page.width > page.height and page.getpixel((50, 50))[2] > 220
+    assert client.get(f"{reader}/pages/3").status_code == 404
+    sign_in(client, "student-vice")
+    assert client.get(reader).status_code == 404
+    assert client.get(f"{reader}/pages/2").status_code == 404
+
+    sign_in(client)
+    content = BytesIO()
+    with ZipFile(content, "w") as archive:
+        archive.writestr("Contents/content.hpf", "<package/>")
+    renderer = db.parent / "tooling" / "hwp-cli-1.3.1" / ("hwp.exe" if os.name == "nt" else "hwp")
+    renderer.parent.mkdir(parents=True, exist_ok=True)
+    renderer.touch()
+    calls = []
+
+    def fake_render(command, **options):
+        assert command[0] == str(renderer) and command[1] == "render"
+        source = Path(command[2])
+        assert source.name == "source.hwpx" and source.read_bytes() == content.getvalue()
+        assert options["timeout"] == 25
+        calls.append(source.parent)
+        Path(command[4]).write_bytes(pdf.getvalue())
+
+    from yeonieum.modules.documents import print_preview
+
+    monkeypatch.setattr(print_preview.subprocess, "run", fake_render)
+    ident = upload(client, content.getvalue(), filename="report.hwpx", metadata=metadata(audience="private"))
+    reader = f"/api/documents/{ident}/versions/1/read"
+    assert client.get(reader).json() == {"kind": "pages", "page_count": 2}
+    assert client.get(f"{reader}/pages/2").headers["content-type"] == "image/jpeg"
+    assert len(calls) == 1 and not calls[0].exists()
+    sign_in(client, "student-vice")
+    assert client.get(f"{reader}/pages/2").status_code == 404
+
+
+def test_affiliated_user_without_role_can_upload_and_search_own_private_folders(library):
+    client, _, _, _ = library
+    sign_in(client, "student-new")
+    target = "software-2-A"
+    options = client.get("/api/documents/options").json()["units"]
+    assert [row["id"] for row in options] == [target]
+    assert [item["key"] for item in options[0]["audiences"]] == ["private"]
+    assert prepare(client, metadata=metadata(unit_id=target, audience="organization")).status_code == 403
+    assert prepare(client, metadata=metadata(unit_id="mechanical", audience="private")).status_code == 403
+    parent = create_folder(client, name="가상 분류", audience="private")
+    child = create_folder(client, name="회의 기록", audience="private", parent_id=parent)
+    ident = upload(client, metadata=metadata(unit_id=target, audience="private", folder_id=child))
+    matches = client.get("/api/documents?academic_year=2026&q=가상 분류").json()["items"]
+    assert [row["id"] for row in matches] == [ident]
+    folders = client.get("/api/documents/folders?academic_year=2026").json()
+    assert {folder["id"] for folder in folders} == {parent, child}
+    sign_in(client, "student-chair")
+    assert client.get("/api/documents/folders?academic_year=2026").json() == []
+    assert client.get(f"/api/documents/{ident}/versions/1/read").status_code == 404
+
+
+def test_preview_uses_saved_office_cover_when_print_rendering_is_unavailable(library):
+    client, _, _, _ = library
+    cover, content = BytesIO(), BytesIO()
+    Image.new("RGB", (300, 400), "white").save(cover, "PNG")
+    with ZipFile(content, "w") as archive:
+        archive.writestr("word/document.xml", "<document><p><r><t>sample</t></r></p></document>")
+        archive.writestr("docProps/thumbnail.png", cover.getvalue())
+    ident = upload(client, content.getvalue(), filename="sample.docx")
+    url = f"/api/documents/{ident}/versions/1"
+    assert client.get(f"{url}/read").json() == {"kind": "unavailable"}
+    assert client.get(f"{url}/preview").headers["content-type"] == "image/jpeg"
 
 
 def test_cross_org_ids_search_count_and_upload_session_are_private(library):
@@ -492,6 +620,82 @@ def test_nested_folder_inherits_year_org_visibility_and_preserves_files(library)
         ).json()
         assert {r["id"] for r in folders} == {parent, child}
         assert detail(reopened, ident)["folder_id"] == child
+
+
+def test_managers_move_shared_files_atomically_without_changing_versions_or_audience(library, monkeypatch):
+    client, path, _, _ = library
+    parent = create_folder(client)
+    child = create_folder(client, parent_id=parent, name="하위 폴더")
+    wrong_year = create_folder(client, academic_year=2025)
+    sign_in(client, "student-vice")
+    source = upload(client, metadata=metadata(audience="organization"))
+    personal = upload(client, metadata=metadata(audience="private"))
+    endpoint = f"/api/documents/{source}/move"
+    assert detail(client, source)["can_manage"] and not detail(client, source)["can_move"]
+    assert client.post(endpoint, json={"folder_id": child, "expected_revision": 1}).status_code == 403
+    sign_in(client, "student-rep")
+    assert not detail(client, source)["can_move"]
+    assert client.post(endpoint, json={"folder_id": child, "expected_revision": 1}).status_code == 404
+
+    sign_in(client, "student-chair")
+    assert detail(client, source)["can_move"]
+    before = detail(client, source)
+    assert client.post(endpoint, json={"folder_id": wrong_year, "expected_revision": 1}).status_code == 422
+    private_folder = create_folder(client, audience="private")
+    assert (
+        client.post(endpoint, json={"folder_id": private_folder, "expected_revision": 1}).status_code == 422
+    )
+    assert (
+        client.post(
+            f"/api/documents/{personal}/move", json={"folder_id": private_folder, "expected_revision": 1}
+        ).status_code
+        == 404
+    )
+    legacy = upload(client)
+    assert not detail(client, legacy)["can_move"]
+    assert (
+        client.post(
+            f"/api/documents/{legacy}/move", json={"folder_id": child, "expected_revision": 1}
+        ).status_code
+        == 403
+    )
+    assert detail(client, source) == before
+
+    sign_in(client, "staff-demo")
+    assert client.post(endpoint, json={"folder_id": child, "expected_revision": 1}).status_code == 404
+    for org in ("council", "student"):
+        response = client.post("/api/documents/staff-scopes", json={"unit_id": org, "enabled": True})
+        assert response.is_success
+    wrong_org = create_folder(client, org_id="student")
+    assert client.post(endpoint, json={"folder_id": wrong_org, "expected_revision": 1}).status_code == 422
+    assert client.post(endpoint, json={"folder_id": child, "expected_revision": 1}).status_code == 200
+    assert client.post(endpoint, json={"folder_id": child, "expected_revision": 1}).status_code == 200
+    assert client.post(endpoint, json={"folder_id": None, "expected_revision": 1}).status_code == 409
+    assert detail(client, source)["folder_id"] == child
+    assert client.post(endpoint, json={"folder_id": parent, "expected_revision": 2}).status_code == 200
+    assert client.post(endpoint, json={"folder_id": None, "expected_revision": 3}).status_code == 200
+    after = detail(client, source)
+    assert after["revision"] == 4 and after["folder_id"] is None
+    for key in ("audience", "versions", "current_version", "academic_year", "unit_id", "created_by"):
+        assert after[key] == before[key]
+    assert client.get(f"/api/documents/{source}/versions/1/download").content == b"synthetic v1"
+    with connect(path) as conn:
+        assert conn.execute("SELECT count(*) FROM audit WHERE action='document.moved'").fetchone()[0] == 3
+
+    from yeonieum.modules.documents import router
+
+    def fail_audit(*args):
+        raise RuntimeError("synthetic audit failure")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(router, "audit", fail_audit)
+        with pytest.raises(RuntimeError, match="synthetic audit failure"):
+            client.post(endpoint, json={"folder_id": child, "expected_revision": 4})
+        assert detail(client, source) == after
+
+    assert client.post(f"/api/documents/{source}/trash", json={"expected_revision": 4}).status_code == 200
+    assert not detail(client, source)["can_move"]
+    assert client.post(endpoint, json={"folder_id": child, "expected_revision": 5}).status_code == 404
 
 
 def test_private_folder_ids_cannot_be_reused_and_duplicate_names_are_per_owner(library):

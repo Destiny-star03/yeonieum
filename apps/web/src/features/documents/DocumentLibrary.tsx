@@ -3,16 +3,20 @@ import {
   useEffect,
   useRef,
   useState,
+  type DragEvent,
   type FormEvent,
 } from "react";
 import "./documents.css";
 import { api } from "../../shared/api";
 import { seoulYear } from "../../shared/tenure";
 import DocumentDetail from "./DocumentDetail";
+import DocumentViewer from "./DocumentViewer";
+import LibraryNavigation from "./LibraryNavigation";
 import UploadDialog from "./UploadDialog";
 import FolderDialog from "./FolderDialog";
 import LibraryFiles from "./LibraryFiles";
 import StaffScopes from "./StaffScopes";
+import type { NotificationTarget } from "../notifications/NotificationBell";
 import {
   type LibraryDocument,
   type LibraryFolder,
@@ -57,13 +61,16 @@ const fileTypes = [
   ["sheet", "XLS"],
   ["image", "이미지"],
 ];
+const fileDragType = "application/x-yeonieum-document";
 
 export default function DocumentLibrary({
   time,
   isAdmin,
+  notification,
 }: {
   time: string;
   isAdmin: boolean;
+  notification: Extract<NotificationTarget, { kind: "document" }> | null;
 }) {
   const [options, setOptions] = useState<LibraryOptions>({
     units: [],
@@ -83,12 +90,18 @@ export default function DocumentLibrary({
   const [upload, setUpload] = useState<LibraryDocument | "new" | null>(null),
     [newFolder, setNewFolder] = useState(false);
   const [grid, setGrid] = useState(true);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [searchHere, setSearchHere] = useState(false);
+  const [draggedFile, setDraggedFile] = useState<LibraryDocument | null>(null);
+  const [activeDropTarget, setActiveDropTarget] = useState<string | null>(null);
   const [busy, setBusy] = useState(false),
     [loading, setLoading] = useState(true),
     [error, setError] = useState(""),
     [notice, setNotice] = useState("");
   const latestRequest = useRef(0),
     latestSelection = useRef(0);
+  const latestRefresh = useRef<() => Promise<void>>(async () => {});
+  const detailPanel = useRef<HTMLElement>(null);
   const browser = Boolean(applied.org_id),
     privateMode = applied.audience === "private";
   const currentFolder = folders.find((f) => f.id === applied.folder_id) || null;
@@ -102,7 +115,7 @@ export default function DocumentLibrary({
     const [data, available, directories] = await Promise.all([
       api<{ items: LibraryDocument[]; total: number }>(`/documents?${params}`),
       api<LibraryOptions>("/documents/options"),
-      applied.org_id && applied.academic_year && applied.audience !== "all"
+      applied.academic_year && applied.trash === "false"
         ? api<LibraryFolder[]>(
             `/documents/folders?${new URLSearchParams({ org_id: applied.org_id, academic_year: applied.academic_year, audience: applied.audience })}`,
           )
@@ -121,11 +134,13 @@ export default function DocumentLibrary({
   }, [applied, page]);
   useEffect(() => {
     let alive = true;
+    latestRefresh.current = refresh;
     setLoading(true);
     setError("");
     setRows([]);
     setFolders([]);
     setDetail(null);
+    setPreviewOpen(false);
     latestSelection.current++;
     refresh()
       .catch((e: Error) => {
@@ -149,24 +164,31 @@ export default function DocumentLibrary({
     setNotice("");
     try {
       await action();
-      setNotice(message);
+      if (message) setNotice(message);
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setBusy(false);
     }
   }
-  async function open(id: string) {
+  async function open(id: string, preview = false) {
     const request = ++latestSelection.current;
     setDetail(null);
     const row = await api<LibraryDocument & { versions: LibraryVersion[] }>(
       `/documents/${id}`,
     );
-    if (request === latestSelection.current) setDetail(row);
+    if (request === latestSelection.current) {
+      setDetail(row);
+      setPreviewOpen(preview && !row.deleted_at);
+    }
   }
+  useEffect(() => {
+    if (notification) void perform(() => open(notification.id, true), "");
+  }, [notification]);
   async function changed() {
     const selectedId = detail?.id;
     setDetail(null);
+    setPreviewOpen(false);
     setRows([]);
     await refresh();
     if (selectedId) {
@@ -183,21 +205,55 @@ export default function DocumentLibrary({
     setApplied(updated);
     setPage(0);
     setDetail(null);
+    setPreviewOpen(false);
+    setSearchHere(false);
     setNotice("");
   }
   function enterOrg(id: string) {
     setGrid(false);
+    const personalOnly =
+      options.units.some((u) => u.org_id === id) &&
+      !options.units.some(
+        (u) =>
+          u.org_id === id && u.audiences.some((a) => a.key === "organization"),
+      );
     navigate({
       academic_year: applied.academic_year || seoulYear(time),
       org_id: id,
-      audience: "organization",
+      audience: personalOnly ? "private" : "organization",
       folder_id: "root",
+    });
+  }
+  function visitMode(mode: "recent" | "private" | "organization" | "trash") {
+    if (mode === "recent") {
+      setGrid(true);
+      navigate({});
+      return;
+    }
+    navigate({
+      academic_year: applied.academic_year,
+      org_id: applied.org_id,
+      audience: mode === "trash" ? "all" : mode,
+      trash: mode === "trash" ? "true" : "false",
+      folder_id: browser && mode !== "trash" ? "root" : "",
     });
   }
   function search(e: FormEvent) {
     e.preventDefault();
     setPage(0);
-    setApplied({ ...filters });
+    const q = filters.q.trim();
+    const acrossYear = q && !searchHere && filters.trash !== "true";
+    const next = acrossYear
+      ? {
+          ...filters,
+          q,
+          folder_id: "",
+          org_id: filters.org_id === applied.org_id ? "" : filters.org_id,
+          audience: privateMode ? "private" : "all",
+        }
+      : { ...filters, q };
+    setFilters(next);
+    setApplied(next);
   }
   const crumbs: LibraryFolder[] = [];
   for (
@@ -208,15 +264,130 @@ export default function DocumentLibrary({
     crumbs.unshift(f);
   const visibleFolders =
     applied.trash === "false"
-      ? folders.filter(
-          (f) =>
-            f.parent_id === (currentFolder?.id || null) &&
-            f.name.toLocaleLowerCase().includes(applied.q.toLocaleLowerCase()),
+      ? folders.filter((f) =>
+          applied.q && !applied.folder_id
+            ? f.name.toLocaleLowerCase().includes(applied.q.toLocaleLowerCase())
+            : f.parent_id === (currentFolder?.id || null) &&
+              f.name
+                .toLocaleLowerCase()
+                .includes(applied.q.toLocaleLowerCase()),
         )
       : [];
+  function canMoveTo(row: LibraryDocument, folder: LibraryFolder | null) {
+    const folderId = folder?.id || "root";
+    return (
+      row.can_move &&
+      (row.folder_id || "root") !== folderId &&
+      row.org_id === (folder?.org_id || applied.org_id) &&
+      row.academic_year ===
+        (folder?.academic_year ?? Number(applied.academic_year)) &&
+      row.audience === (folder?.audience || applied.audience)
+    );
+  }
+  function endFileDrag() {
+    setDraggedFile(null);
+    setActiveDropTarget(null);
+  }
+  async function moveFile(row: LibraryDocument, folder: LibraryFolder | null) {
+    if (busy || loading || !canMoveTo(row, folder)) return;
+    const requestId = latestRequest.current;
+    await perform(
+      async () => {
+        await api(`/documents/${row.id}/move`, {
+          folder_id: folder?.id ?? null,
+          expected_revision: row.revision,
+        });
+        if (requestId === latestRequest.current) {
+          setDetail((selected) => (selected?.id === row.id ? null : selected));
+          if (applied.folder_id && rows.some((file) => file.id === row.id)) {
+            setRows((files) => files.filter((file) => file.id !== row.id));
+            setTotal((count) => Math.max(0, count - 1));
+          }
+        }
+        try {
+          await latestRefresh.current();
+        } catch {
+          setError("자료 목록을 갱신하지 못했습니다. 새로고침해 주세요.");
+        }
+      },
+      `‘${row.title}’ 자료를 ${folder ? `‘${folder.name}’ 폴더` : "최상위"}로 이동했습니다.`,
+    );
+  }
+  function fileDragProps(row: LibraryDocument) {
+    if (
+      busy ||
+      loading ||
+      ![null, ...crumbs, ...visibleFolders].some((folder) =>
+        canMoveTo(row, folder),
+      )
+    )
+      return;
+    return {
+      draggable: true,
+      onDragStart: (event: DragEvent<HTMLButtonElement>) => {
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData(fileDragType, row.id);
+        setDraggedFile(row);
+      },
+      onDragEnd: endFileDrag,
+    };
+  }
+  function folderDropProps(folder: LibraryFolder | null) {
+    if (busy || loading || !draggedFile || !canMoveTo(draggedFile, folder))
+      return;
+    const target = folder?.id || "root";
+    return {
+      "data-drop-state": activeDropTarget === target ? "active" : "available",
+      onDragOver: (event: DragEvent<HTMLButtonElement>) => {
+        if (!event.dataTransfer.types.includes(fileDragType)) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "move";
+        setActiveDropTarget(target);
+      },
+      onDragLeave: (event: DragEvent<HTMLButtonElement>) => {
+        if (
+          event.relatedTarget instanceof Node &&
+          event.currentTarget.contains(event.relatedTarget)
+        )
+          return;
+        setActiveDropTarget((active) => (active === target ? null : active));
+      },
+      onDrop: (event: DragEvent<HTMLButtonElement>) => {
+        if (event.dataTransfer.getData(fileDragType) !== draggedFile.id) return;
+        event.preventDefault();
+        endFileDrag();
+        void moveFile(draggedFile, folder);
+      },
+    };
+  }
+  function folderPath(folder: LibraryFolder) {
+    const names = [folder.name];
+    let parentId = folder.parent_id;
+    while (parentId && names.length <= folders.length) {
+      const parent = folders.find((entry) => entry.id === parentId);
+      if (!parent) break;
+      names.unshift(parent.name);
+      parentId = parent.parent_id;
+    }
+    return names.join(" / ");
+  }
   const writable = options.units.filter(
     (u) => !applied.org_id || u.org_id === applied.org_id,
   );
+  const folderWritable = currentFolder
+    ? writable.filter((unit) =>
+        unit.audiences.some((a) => a.key === currentFolder.audience),
+      )
+    : writable;
+  const uploadUnits = folderWritable.length ? folderWritable : options.units;
+  const uploadFolder = folderWritable.length ? currentFolder : null;
+  const uploadUnit =
+    uploadUnits.find(
+      (unit) =>
+        browser &&
+        !privateMode &&
+        unit.audiences.some((a) => a.key === "organization"),
+    ) || uploadUnits[0];
   const years = [
     ...new Set([
       ...(options.years || []),
@@ -224,15 +395,14 @@ export default function DocumentLibrary({
       ...(applied.academic_year ? [Number(applied.academic_year)] : []),
     ]),
   ].sort((a, b) => b - a);
-  const uploadOptions = browser ? { ...options, units: writable } : options;
+  const uploadOptions = { ...options, units: uploadUnits };
+  const currentVersion = detail?.versions.find(
+    (version) => version.version === detail.current_version,
+  );
   return (
     <div className="document-library">
       <header className="library-heading">
-        <div>
-          <span className="library-kicker">OUR SHARED ARCHIVE</span>
-          <h2>기록을 이어가는 자료실</h2>
-          <p>나의 준비부터 우리의 기록까지, 한곳에서 이어갑니다.</p>
-        </div>
+        <h1>자료실</h1>
         <div className="library-actions">
           <button
             disabled={!writable.length || busy || loading}
@@ -242,7 +412,7 @@ export default function DocumentLibrary({
           </button>
           <button
             className="primary"
-            disabled={!writable.length || busy || loading}
+            disabled={!options.units.length || busy || loading}
             onClick={() => setUpload("new")}
           >
             ＋ 자료 등록
@@ -270,6 +440,7 @@ export default function DocumentLibrary({
             </button>
             <span>›</span>
             <button
+              {...folderDropProps(null)}
               onClick={() =>
                 navigate({
                   academic_year: applied.academic_year,
@@ -287,6 +458,7 @@ export default function DocumentLibrary({
           <span className="library-crumb" key={f.id}>
             <span>›</span>
             <button
+              {...folderDropProps(f)}
               onClick={() =>
                 navigate({
                   academic_year: applied.academic_year,
@@ -301,168 +473,43 @@ export default function DocumentLibrary({
           </span>
         ))}
       </nav>
-      {!browser && (
-        <section
-          className="library-start"
-          aria-label={applied.academic_year ? "단체별 자료실" : "연도별 자료실"}
-        >
-          <div className="section-heading">
-            <h3>
-              {applied.academic_year
-                ? `${applied.academic_year}년 · 단체별 자료실`
-                : "연도별 자료실"}
-            </h3>
-            {!applied.academic_year && (
-              <label className="library-add-year">
-                다른 연도
-                <input
-                  aria-label="열어볼 연도"
-                  type="number"
-                  min={1900}
-                  max={2200}
-                  value={filters.academic_year}
-                  onChange={(e) =>
-                    setFilters({ ...filters, academic_year: e.target.value })
-                  }
-                  placeholder="예: 2025"
-                />
-                <button
-                  disabled={
-                    !filters.academic_year ||
-                    Number(filters.academic_year) < 1900 ||
-                    Number(filters.academic_year) > 2200
-                  }
-                  onClick={() =>
-                    navigate({ academic_year: filters.academic_year })
-                  }
-                >
-                  열기
-                </button>
-              </label>
-            )}
-          </div>
-          <div className="library-collection-grid">
-            {applied.academic_year
-              ? options.organizations.map((o, i) => (
-                  <button
-                    className="library-collection"
-                    key={o.id}
-                    onClick={() => enterOrg(o.id)}
-                  >
-                    <span
-                      className={`library-collection-art tone-${i % 3}`}
-                      aria-hidden="true"
-                    >
-                      <b>▱</b>
-                      <i>{applied.academic_year}</i>
-                    </span>
-                    <strong>{o.name}</strong>
-                    <small>폴더와 파일 보기 →</small>
-                  </button>
-                ))
-              : years.map((year) => (
-                  <button
-                    className="library-collection"
-                    key={year}
-                    onClick={() => navigate({ academic_year: String(year) })}
-                  >
-                    <span className="library-collection-art" aria-hidden="true">
-                      <b>{year}</b>
-                      <i>YEONIEUM ARCHIVE</i>
-                    </span>
-                    <strong>{year}년</strong>
-                    <small>
-                      {year === Number(seoulYear(time))
-                        ? "올해의 기록"
-                        : "지난 기록 이어보기"}{" "}
-                      →
-                    </small>
-                  </button>
-                ))}
-            {!options.organizations.length && applied.academic_year && (
-              <p className="muted">
-                현재 열람할 단체가 없습니다. 담당 권한을 확인해 주세요.
-              </p>
-            )}
-          </div>
-          <p className="library-sharing-note">
-            개인 보관은 나만, 단체 공유는 해당 단체 담당자가 봅니다. 연도는 자료
-            분류이며 역할 임기와 별개입니다.
-          </p>
-        </section>
-      )}
       <section className="library-workarea">
-        {browser && (
-          <aside className="library-browser-sidebar" aria-label="자료 보관함">
-            <span className="library-kicker">
-              {applied.academic_year} ARCHIVE
-            </span>
-            <h3>{currentOrg?.name}</h3>
-            <button
-              aria-pressed={!privateMode && applied.trash === "false"}
-              onClick={() =>
-                navigate({
-                  academic_year: applied.academic_year,
-                  org_id: applied.org_id,
-                  audience: "organization",
-                  folder_id: "root",
-                })
-              }
-            >
-              <span aria-hidden="true">▱</span> 단체 공유
-            </button>
-            <button
-              aria-pressed={privateMode && applied.trash === "false"}
-              onClick={() =>
-                navigate({
-                  academic_year: applied.academic_year,
-                  org_id: applied.org_id,
-                  audience: "private",
-                  folder_id: "root",
-                })
-              }
-            >
-              <span aria-hidden="true">♙</span> 개인 보관
-            </button>
-            <button
-              aria-pressed={applied.trash === "true"}
-              onClick={() =>
-                navigate({
-                  academic_year: applied.academic_year,
-                  org_id: applied.org_id,
-                  audience: "all",
-                  trash: "true",
-                })
-              }
-            >
-              <span aria-hidden="true">♧</span> 휴지통
-            </button>
-            <div className="library-sidebar-note">
-              {privateMode
-                ? "개인 파일과 폴더는 작성자에게만 표시됩니다."
-                : "단체의 공유 자료를 모았습니다. 기존 범위 한정 자료는 허용된 담당자에게만 표시됩니다."}
-            </div>
-          </aside>
-        )}
+        <LibraryNavigation
+          years={years}
+          year={applied.academic_year}
+          org={applied.org_id}
+          mode={
+            applied.trash === "true"
+              ? "trash"
+              : privateMode
+                ? "private"
+                : browser
+                  ? "organization"
+                  : applied.academic_year
+                    ? "year"
+                    : "recent"
+          }
+          organizations={options.organizations}
+          onYear={(year) => navigate({ academic_year: year })}
+          onOrg={enterOrg}
+          onMode={visitMode}
+        />
         <div className="library-main">
           <div className="library-file-heading">
             <div>
-              <span className="library-kicker">
-                {browser
-                  ? privateMode
-                    ? "MY FILES"
-                    : "TEAM FILES"
-                  : "RECENT FILES"}
-              </span>
               <h3>
                 {applied.trash === "true"
                   ? "휴지통"
-                  : currentFolder?.name ||
-                    (browser
-                      ? privateMode
+                  : applied.q
+                    ? "검색 결과"
+                    : currentFolder?.name ||
+                      (privateMode
                         ? "개인 보관"
-                        : "단체 공유"
-                      : "최근 자료")}{" "}
+                        : browser
+                          ? "단체 공유"
+                          : applied.academic_year
+                            ? `${applied.academic_year}년 자료`
+                            : "최근 자료")}{" "}
                 <span className="count">{total}</span>
               </h3>
             </div>
@@ -497,12 +544,28 @@ export default function DocumentLibrary({
               <span aria-hidden="true">⌕</span>
               <input
                 aria-label="자료 검색"
-                placeholder="제목·설명·파일 이름 검색"
+                placeholder={
+                  applied.academic_year
+                    ? `${applied.academic_year}년 자료 검색`
+                    : "제목·파일명·폴더 검색"
+                }
                 maxLength={150}
                 value={filters.q}
                 onChange={(e) => setFilters({ ...filters, q: e.target.value })}
               />
             </label>
+            {browser && applied.trash === "false" && (
+              <select
+                aria-label="검색 범위"
+                value={searchHere ? "location" : "year"}
+                onChange={(event) =>
+                  setSearchHere(event.target.value === "location")
+                }
+              >
+                <option value="year">이 연도 전체</option>
+                <option value="location">현재 위치</option>
+              </select>
+            )}
             <button disabled={loading || busy}>검색 적용</button>
             <details className="library-advanced">
               <summary>상세 검색</summary>
@@ -648,9 +711,16 @@ export default function DocumentLibrary({
               grid={grid}
               selected={detail?.id}
               busy={busy}
-              onOpen={(id) =>
-                void perform(() => open(id), "자료 상세를 열었습니다.")
+              fileDragProps={fileDragProps}
+              folderDropProps={folderDropProps}
+              folderSubtitle={(folder) =>
+                browser
+                  ? applied.q
+                    ? folderPath(folder)
+                    : ""
+                  : `${options.organizations.find((o) => o.id === folder.org_id)?.name || ""} · ${folder.parent_id ? folderPath(folder) : folder.audience === "private" ? "개인 보관" : "단체 공유"}`
               }
+              onOpen={(id) => void perform(() => open(id, true), "")}
               onFolder={(f) => {
                 setGrid(false);
                 navigate({
@@ -695,11 +765,13 @@ export default function DocumentLibrary({
             </button>
           </div>
         </div>
-        <aside
-          className={`library-inspector ${detail ? "has-selection" : ""}`}
-          aria-label="파일 상세 패널"
-        >
-          {detail ? (
+        {detail && (
+          <aside
+            className="library-inspector has-selection"
+            aria-label="파일 상세 패널"
+            ref={detailPanel}
+            tabIndex={-1}
+          >
             <DocumentDetail
               key={`${detail.id}-${detail.revision}`}
               row={detail}
@@ -707,42 +779,61 @@ export default function DocumentLibrary({
               options={options}
               busy={busy}
               onClose={() => setDetail(null)}
+              onPreview={() => setPreviewOpen(true)}
               onVersion={() => setUpload(detail)}
+              moveDestinations={[null, ...folders]
+                .filter((folder) => canMoveTo(detail, folder))
+                .map((folder) => ({
+                  id: folder?.id || "root",
+                  label: folder ? folderPath(folder) : "최상위",
+                }))}
+              onMove={(id) => {
+                const target = folders.find((folder) => folder.id === id);
+                if (id === "root" || target)
+                  void moveFile(detail, target ?? null);
+              }}
               onChanged={changed}
               perform={perform}
             />
-          ) : (
-            <div className="library-inspector-empty">
-              <span aria-hidden="true">▤</span>
-              <strong>기록을 펼쳐보세요</strong>
-              <p>
-                파일을 선택하면 정보와
-                <br />
-                이전 버전을 확인할 수 있습니다.
-              </p>
-            </div>
-          )}
-        </aside>
+          </aside>
+        )}
       </section>
+      {previewOpen && detail && currentVersion && !detail.deleted_at && (
+        <DocumentViewer
+          key={`${detail.id}-${detail.current_version}`}
+          row={detail}
+          version={currentVersion}
+          onClose={() => setPreviewOpen(false)}
+          onDetails={() => {
+            setPreviewOpen(false);
+            window.requestAnimationFrame(() => detailPanel.current?.focus());
+          }}
+        />
+      )}
       {upload && (
         <UploadDialog
           target={upload}
           options={uploadOptions}
           time={time}
-          folderName={currentFolder?.name}
+          folderName={uploadFolder?.name}
           defaults={{
             academic_year: Number(applied.academic_year || seoulYear(time)),
-            unit_id: writable[0]?.id || "",
+            unit_id: uploadUnit?.id || "",
             audience:
-              currentFolder?.audience ||
-              (browser && !privateMode ? "organization" : "private"),
-            folder_id: currentFolder?.id || null,
+              uploadFolder?.audience ||
+              (browser &&
+              !privateMode &&
+              uploadUnit?.org_id === applied.org_id &&
+              uploadUnit.audiences.some((a) => a.key === "organization")
+                ? "organization"
+                : "private"),
+            folder_id: uploadFolder?.id || null,
           }}
           onClose={() => setUpload(null)}
-          onSaved={async (id) => {
+          onSaved={async (ids) => {
             await refresh();
-            await open(id);
-            setNotice("파일을 등록했습니다. 이전 버전은 보존됩니다.");
+            if (ids.length === 1) await open(ids[0]);
+            setNotice(`${ids.length}개 파일을 등록했습니다.`);
           }}
         />
       )}

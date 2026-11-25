@@ -18,7 +18,11 @@ type Response = {
   sources: ExternalSource[];
   can_refresh: boolean;
 };
-export function useExternalCalendars(query: string, reload: number) {
+export function useExternalCalendars(
+  query: string,
+  reload: number,
+  keepOverlap = false,
+) {
   const request = useRef(0),
     lastQuery = useRef("");
   const [data, setData] = useState<Response>({
@@ -35,7 +39,7 @@ export function useExternalCalendars(query: string, reload: number) {
   }, []);
   useEffect(() => {
     const current = ++request.current;
-    if (lastQuery.current !== query)
+    if (lastQuery.current !== query && !keepOverlap)
       setData({ events: [], sources: [], can_refresh: false });
     lastQuery.current = query;
     setError("");
@@ -56,7 +60,7 @@ export function useExternalCalendars(query: string, reload: number) {
     return () => {
       if (current === request.current) ++request.current;
     };
-  }, [query, reload, tick]);
+  }, [query, reload, tick, keepOverlap]);
   async function refresh() {
     const current = ++request.current;
     setLoading(true);

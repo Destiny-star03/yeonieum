@@ -8,20 +8,20 @@ CREATE TABLE IF NOT EXISTS finance_grants (
  PRIMARY KEY(user_id,org_id,capability)
 );
 CREATE TABLE IF NOT EXISTS annual_budgets (
- org_id TEXT NOT NULL REFERENCES units(id), year INTEGER NOT NULL, amount INTEGER NOT NULL,
+ org_id TEXT NOT NULL REFERENCES units(id), year INTEGER NOT NULL, amount BIGINT NOT NULL,
  revision INTEGER NOT NULL DEFAULT 1, settled_at TEXT, settled_by TEXT REFERENCES users(id),
  PRIMARY KEY(org_id,year), CHECK(amount>=0)
 );
 CREATE TABLE IF NOT EXISTS budget_events (
  id TEXT PRIMARY KEY, org_id TEXT NOT NULL REFERENCES units(id), year INTEGER NOT NULL,
- name TEXT NOT NULL, allocation INTEGER NOT NULL, created_by TEXT NOT NULL REFERENCES users(id),
+ name TEXT NOT NULL, allocation BIGINT NOT NULL, created_by TEXT NOT NULL REFERENCES users(id),
  active INTEGER NOT NULL DEFAULT 1, revision INTEGER NOT NULL DEFAULT 1,
  FOREIGN KEY(org_id,year) REFERENCES annual_budgets(org_id,year), CHECK(allocation>=0)
 );
 CREATE TABLE IF NOT EXISTS expenses (
  id TEXT PRIMARY KEY, org_id TEXT NOT NULL REFERENCES units(id), year INTEGER NOT NULL,
  event_id TEXT REFERENCES budget_events(id), spent_on TEXT NOT NULL,
- purpose TEXT NOT NULL, amount INTEGER NOT NULL, executor_id TEXT NOT NULL REFERENCES users(id),
+ purpose TEXT NOT NULL, amount BIGINT NOT NULL, executor_id TEXT NOT NULL REFERENCES users(id),
  executor_was_head INTEGER NOT NULL DEFAULT 0, created_by TEXT NOT NULL REFERENCES users(id),
  request_id TEXT,
  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, review_state TEXT NOT NULL DEFAULT 'pending',
@@ -33,6 +33,10 @@ CREATE TABLE IF NOT EXISTS expenses (
 CREATE TABLE IF NOT EXISTS expense_changes (
  id TEXT PRIMARY KEY, expense_id TEXT NOT NULL REFERENCES expenses(id), actor_id TEXT NOT NULL REFERENCES users(id),
  changed_at TEXT NOT NULL, reason TEXT NOT NULL, before_json TEXT NOT NULL, after_json TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS expense_resolutions (
+ expense_id TEXT PRIMARY KEY REFERENCES expenses(id),
+ title TEXT NOT NULL, payee TEXT NOT NULL, payment_method TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS expense_evidence (
  id TEXT PRIMARY KEY, expense_id TEXT NOT NULL REFERENCES expenses(id),

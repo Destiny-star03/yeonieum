@@ -1,9 +1,22 @@
-import type { CalendarEvent } from "./api";
+import type { CalendarEvent, DisplayedCalendarEvent } from "./api";
 import { dayOf, displayTime, tone } from "./dates";
 export type CalendarDrag = {
   id: string;
+  revision: number;
   start: string;
+  end: string;
+  occurrenceStart: string;
   operation: "move" | "resize";
+};
+export type DropChange = {
+  event: CalendarEvent;
+  operation: CalendarDrag["operation"];
+  occurrenceStart: string;
+  previousStart: number;
+  previousEnd: number;
+  day: string;
+  starts: number;
+  ends: number;
 };
 export function beginEventDrag(
   e: React.DragEvent,
@@ -20,10 +33,17 @@ export function beginEventDrag(
     "application/yeonieum-event",
     JSON.stringify({
       id: event.id,
+      revision: event.revision,
       start: event.starts_at,
+      end: event.ends_at,
+      occurrenceStart: event.occurrence_start || event.starts_at,
       operation,
     } satisfies CalendarDrag),
   );
+}
+export function eventActionLabel(event: DisplayedCalendarEvent, day: string) {
+  const action = event.pendingMove ? "저장 전 변경 확인" : "일정 열기";
+  return `${event.title} ${action} · ${day}`;
 }
 export default function EventChip({
   event,
@@ -33,17 +53,18 @@ export default function EventChip({
   hour24 = true,
   bar = false,
 }: {
-  event: CalendarEvent;
+  event: DisplayedCalendarEvent;
   day: string;
-  onOpen: (event: CalendarEvent) => void;
+  onOpen: (event: DisplayedCalendarEvent) => void;
   zone?: string;
   hour24?: boolean;
   bar?: boolean;
 }) {
   return (
     <button
-      className={`calendar-event calendar-tone-${tone(event.org_id)} cal-color-${event.color || "default"} ${bar || event.all_day ? "is-bar" : "is-timed"} ${event.availability === "free" ? "is-free" : ""}`}
-      aria-label={`${event.title} 일정 열기 · ${day}`}
+      className={`calendar-event calendar-tone-${tone(event.displayCalendar?.org_id || event.org_id)} cal-color-${event.displayColor || event.color || "default"} ${bar || event.all_day ? "is-bar" : "is-timed"} ${event.availability === "free" ? "is-free" : ""}`}
+      aria-label={eventActionLabel(event, day)}
+      data-pending-move={event.pendingMove}
       title={`${event.title} · ${event.unit_name}`}
       draggable={event.can_edit}
       onDragStart={(e) => beginEventDrag(e, event)}
@@ -56,6 +77,9 @@ export default function EventChip({
             ? "계속"
             : displayTime(event.starts_at, hour24, zone)}
       </span>
+      {event.pendingMove && (
+        <i className="cal-pending-dot" aria-hidden="true" />
+      )}
       <strong>{event.title}</strong>
       {event.recurrence && (
         <span className="cal-repeat-mark" aria-label="반복 일정">

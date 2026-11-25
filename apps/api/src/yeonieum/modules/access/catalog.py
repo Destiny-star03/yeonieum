@@ -61,7 +61,7 @@ def seed_roles(conn, org_id=None):
             ]
         for code, label, kind in defaults:
             conn.execute(
-                "INSERT OR IGNORE INTO role_definitions (id,org_id,code,label,scope_kind,builtin) VALUES (?,?,?,?,?,1)",
+                "INSERT INTO role_definitions (id,org_id,code,label,scope_kind,builtin) VALUES (?,?,?,?,?,1) ON CONFLICT DO NOTHING",
                 (f"{ident}:{code}", ident, code, label, kind),
             )
 

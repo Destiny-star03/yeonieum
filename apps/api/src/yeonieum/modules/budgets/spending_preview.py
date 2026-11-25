@@ -143,7 +143,11 @@ def preview_spending(content, filename):
             "items": items,
             "total": total,
             "sheet": sheet,
-            "notice": "첫 표시 시트만 읽었습니다. 합계·소계 행은 제외하며 날짜·집행자는 직접 확인해 주세요. 확인한 합계를 지출 1건으로 기록하고 원본 파일을 증빙으로 보존합니다.",
+            "notice": (
+                ("첫 표시 시트의 값만 읽었습니다. " if filename.lower().endswith(".xlsx") else "")
+                + "합계·소계 행은 합산에서 제외했습니다. 집행일·집행자·용도를 확인한 뒤 기록하면 "
+                "지출 1건과 원본 증빙을 저장합니다."
+            ),
         }
     except (
         ValueError,

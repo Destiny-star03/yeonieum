@@ -84,6 +84,71 @@ def test_calendar_create_update_remove_persists_and_keeps_audit(calendar):
     conn.close()
 
 
+def test_one_event_can_be_shared_with_multiple_authorized_organizations(calendar):
+    client, path, _, app = calendar
+    login(client, "staff-demo")
+    assert (
+        client.post("/api/calendar/events", json=payload(additional_unit_ids=["council"])).status_code == 422
+    )
+    created = client.post(
+        "/api/calendar/events",
+        json=payload(additional_unit_ids=["student"], participant_ids=["rep", "other"]),
+    )
+    assert created.status_code == 201
+    event = created.json()
+    ident = event["id"]
+    url = f"/api/calendar/events/{ident}"
+    assert [target["unit_id"] for target in event["calendars"]] == ["software", "student"]
+    assert [row["id"] for row in listing(client).json()["events"]] == [ident]
+
+    with TestClient(app, headers=ORIGIN) as reader:
+        login(reader, "student-other")
+        visible = reader.get(url).json()
+        assert visible["unit_id"] == "student"
+        assert [target["unit_id"] for target in visible["calendars"]] == ["student"]
+        assert visible["participant_ids"] == ["other"]
+        assert not visible["can_edit"]
+        assert (
+            reader.post(f"{url}/update", json=payload(unit_id="student", expected_revision=1)).status_code
+            == 403
+        )
+        assert (
+            reader.post(f"{url}/remove", json={"confirmed": True, "expected_revision": 1}).status_code == 403
+        )
+        assert (
+            reader.post(
+                "/api/calendar/events", json=payload(unit_id="student", additional_unit_ids=["software"])
+            ).status_code
+            == 403
+        )
+        assert (
+            reader.get(
+                "/api/calendar/editor-options", params=[("unit_id", "student"), ("unit_id", "software")]
+            ).status_code
+            == 403
+        )
+        assert [row["id"] for row in listing(reader).json()["events"]] == [ident]
+        login(reader, "student-head")
+        assert reader.get(url).status_code == 404
+
+    updated = client.post(f"{url}/update", json=payload(title="공동 일정", expected_revision=1))
+    assert updated.status_code == 200
+    assert [target["unit_id"] for target in updated.json()["calendars"]] == ["software", "student"]
+    conn = connect(path)
+    try:
+        audited = conn.execute(
+            "SELECT org_id, action FROM audit WHERE target_id=? ORDER BY org_id, action", (ident,)
+        ).fetchall()
+        assert [tuple(row) for row in audited] == [
+            ("council", "calendar.created"),
+            ("council", "calendar.updated"),
+            ("student", "calendar.created"),
+            ("student", "calendar.updated"),
+        ]
+    finally:
+        conn.close()
+
+
 def test_event_color_palette_persists_and_rejects_unknown_values(calendar):
     c, _, _, app = calendar
     colors = [
@@ -288,6 +353,95 @@ def test_weekly_series_expands_only_in_window_and_delete_removes_all(calendar):
         == 200
     )
     assert listing(c).json()["events"] == []
+
+
+def test_scoped_occurrence_moves_keep_original_order_and_count(calendar):
+    client, path, clock, app = calendar
+    row = client.post(
+        "/api/calendar/events", json=payload(recurrence={"frequency": "daily", "count": 4})
+    ).json()
+    url = f"/api/calendar/events/{row['id']}/occurrence"
+    original = listing(client).json()["events"]
+    year = clock[0].year
+
+    def at(day, hour):
+        return f"{year}-06-{day:02d}T{hour:02d}:00:00+00:00"
+
+    single = {
+        "expected_revision": 1,
+        "scope": "single",
+        "occurrence_start": original[1]["occurrence_start"],
+        "starts_at": at(18, 0),
+        "ends_at": at(18, 1),
+    }
+    assert client.post(url, json=single).status_code == 200
+    assert client.post(url, json=single).status_code == 409
+    following = {
+        **single,
+        "expected_revision": 2,
+        "scope": "following",
+        "occurrence_start": original[2]["occurrence_start"],
+        "starts_at": at(13, 2),
+        "ends_at": at(13, 3),
+    }
+    assert client.post(url, json={**following, "occurrence_start": at(20, 0)}).status_code == 404
+    assert client.post(url, json=following).status_code == 200
+    assert client.get(f"/api/calendar/events/{row['id']}").json()["starts_at"] == row["starts_at"]
+    assert (
+        client.post(
+            f"/api/calendar/events/{row['id']}/update",
+            json=payload(title="변경된 제목", expected_revision=3),
+        ).status_code
+        == 200
+    )
+
+    with TestClient(app, headers=ORIGIN) as restarted:
+        login(restarted)
+        result = listing(restarted).json()["events"]
+        assert [event["starts_at"] for event in result] == [at(10, 0), at(13, 2), at(14, 2), at(18, 0)]
+        assert [event["instance_key"] for event in result] == [
+            original[index]["instance_key"] for index in (0, 2, 3, 1)
+        ]
+        assert all(event["recurrence"]["count"] == 4 for event in result)
+        assert all(event["title"] == "변경된 제목" and "occurrence_changes" not in event for event in result)
+
+    with connect(path) as conn:
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM audit WHERE target_id=? AND action='calendar.occurrence_updated'",
+                (row["id"],),
+            ).fetchone()[0]
+            == 2
+        )
+
+
+def test_scoped_weekly_move_shifts_future_selected_weekdays_across_query_windows(calendar):
+    client, _, clock, _ = calendar
+    row = client.post(
+        "/api/calendar/events",
+        json=payload(recurrence={"frequency": "weekly", "weekdays": [1, 3, 5], "count": 5}),
+    ).json()
+    original = listing(client).json()["events"]
+    assert len(original) == 5
+    before = datetime.fromisoformat(original[1]["starts_at"])
+    after = before + timedelta(days=40)
+    move = {
+        "expected_revision": 1,
+        "scope": "following",
+        "occurrence_start": before.isoformat(),
+        "starts_at": after.isoformat(),
+        "ends_at": (after + timedelta(hours=1)).isoformat(),
+    }
+    assert client.post(f"/api/calendar/events/{row['id']}/occurrence", json=move).status_code == 200
+    assert [event["starts_at"] for event in listing(client).json()["events"]] == [original[0]["starts_at"]]
+    result = client.get(
+        "/api/calendar/events",
+        params={"start": after.isoformat(), "end": (after + timedelta(days=30)).isoformat()},
+    ).json()["events"]
+    assert [event["starts_at"] for event in result] == [
+        (datetime.fromisoformat(event["starts_at"]) + timedelta(days=40)).isoformat()
+        for event in original[1:]
+    ]
 
 
 def test_weekday_interval_count_and_window_do_not_reset_occurrence_count(calendar):

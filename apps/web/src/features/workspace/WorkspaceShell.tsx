@@ -2,6 +2,9 @@ import { useState, type ReactNode } from "react";
 import Brand from "../../shared/Brand";
 import type { Person, Workspace } from "../../shared/api";
 import WorkspaceIcon from "./WorkspaceIcon";
+import NotificationBell, {
+  type NotificationTarget,
+} from "../notifications/NotificationBell";
 
 type Props = {
   workspace: Workspace;
@@ -11,6 +14,7 @@ type Props = {
   onNavigate: (tab: string) => void;
   onActivity: () => void;
   onLogout: () => void;
+  onOpenNotification: (target: NotificationTarget) => void;
   children: ReactNode;
 };
 const groups = [
@@ -39,6 +43,7 @@ export default function WorkspaceShell({
   onNavigate,
   onActivity,
   onLogout,
+  onOpenNotification,
   children,
 }: Props) {
   const [collapsed, setCollapsed] = useState(false);
@@ -79,6 +84,7 @@ export default function WorkspaceShell({
         </span>
         <div className="workspace-header-actions">
           <span className="workspace-demo">로컬 시연</span>
+          <NotificationBell key={user.id} onOpenTarget={onOpenNotification} />
           <div
             className="workspace-account"
             title={`${user.name} · ${roleLabel}`}

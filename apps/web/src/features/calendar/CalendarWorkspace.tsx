@@ -8,36 +8,57 @@ import {
 } from "react";
 import {
   api,
+  eventCalendars,
   type CalendarUnit,
   type CalendarEvent,
+  type DisplayedCalendarEvent,
   type Draft,
   type CalendarPreferences,
   type View,
   type Reminder,
+  type OccurrenceScope,
 } from "./api";
 import EventDialog from "./EventDialog";
+import { CalendarScopeRow } from "./ColorPicker";
+import {
+  calendarColorHex,
+  isCalendarColor,
+  type CalendarColor,
+} from "./calendarColors";
+import RepeatChangeDialog from "./RepeatChangeDialog";
 import {
   useExternalCalendars,
   ExternalSources,
   ExternalEventDetail,
 } from "./ExternalCalendars";
-import MonthGrid from "./MonthGrid";
+import MonthGrid, { type MonthScrollPosition } from "./MonthGrid";
 import TimeGrid from "./TimeGrid";
 import { MiniCalendar, CommandPalette, ShortcutHelp } from "./CalendarTools";
-import type { CalendarDrag } from "./EventChip";
+import type { CalendarDrag, DropChange } from "./EventChip";
 import {
   atMidnight,
   dayOf,
+  daysForWeeks,
   displayTime,
   eventKey,
   localInstant,
   longDay,
+  minuteTime,
+  monthBufferWeeks,
+  monthVisibleWeeks,
+  monthWeekStart,
+  overlapsDay,
   moveMonth,
   shiftDay,
   tone,
   visibleDayRange,
+  weekOffset,
 } from "./dates";
 import WorkspaceIcon from "../workspace/WorkspaceIcon";
+import {
+  remindersChanged,
+  type NotificationTarget,
+} from "../notifications/NotificationBell";
 import "./calendar.css";
 
 const defaults: CalendarPreferences = {
@@ -67,18 +88,62 @@ function loadPreferences() {
   }
 }
 
+function loadOrganizationColors(storageKey: string) {
+  const colors = new Map<string, CalendarColor>();
+  try {
+    const saved: unknown = JSON.parse(localStorage.getItem(storageKey) || "{}");
+    if (saved && typeof saved === "object" && !Array.isArray(saved))
+      for (const [orgId, color] of Object.entries(saved))
+        if (isCalendarColor(color)) colors.set(orgId, color);
+  } catch {
+    /* Colors remain available when browser storage cannot be read. */
+  }
+  return colors;
+}
+
 type Context = { x: number; y: number; day: string; event?: CalendarEvent };
-export default function CalendarWorkspace({ time }: { time: string }) {
+type RepeatChange = {
+  change: DropChange;
+  scope: OccurrenceScope;
+  mode: "new" | "pending" | "review";
+};
+function monthWindowFor(position: MonthScrollPosition) {
+  return { start: shiftDay(position.week, -monthBufferWeeks * 7), position };
+}
+const monthWindowWeeks = monthVisibleWeeks + monthBufferWeeks * 2;
+
+export default function CalendarWorkspace({
+  time,
+  userId,
+  notification,
+}: {
+  time: string;
+  userId: string;
+  notification: Extract<NotificationTarget, { kind: "calendar" }> | null;
+}) {
   const [preferences, setPreferences] =
     useState<CalendarPreferences>(loadPreferences);
+  const colorStorageKey = `yeonieum-calendar-colors-${userId}`;
+  const [organizationColors, setOrganizationColors] = useState(() =>
+    loadOrganizationColors(colorStorageKey),
+  );
   const today = dayOf(time, preferences.zone);
   const [anchor, setAnchor] = useState(today),
     [selected, setSelected] = useState(today),
     [view, setView] = useState<View>("month");
+  const [monthFirstWeek, setMonthFirstWeek] = useState(() =>
+    monthWeekStart(today),
+  );
+  const [monthHeadingDay, setMonthHeadingDay] = useState(today);
+  const retainEventsOnRangeChange = useRef(false);
+  const [monthWindow, setMonthWindow] = useState(() =>
+    monthWindowFor({ week: monthWeekStart(today), fraction: 0 }),
+  );
   const [units, setUnits] = useState<CalendarUnit[]>([]),
     [events, setEvents] = useState<CalendarEvent[]>([]),
     [checked, setChecked] = useState<Set<string> | null>(null);
   const [loading, setLoading] = useState(true),
+    [hasLoaded, setHasLoaded] = useState(false),
     [error, setError] = useState(""),
     [notice, setNotice] = useState(""),
     [reload, setReload] = useState(0);
@@ -91,6 +156,10 @@ export default function CalendarWorkspace({ time }: { time: string }) {
     [sidebar, setSidebar] = useState(true),
     [expanded, setExpanded] = useState(false);
   const [editorBusy, setEditorBusy] = useState(false);
+  const [repeatChange, setRepeatChange] = useState<RepeatChange | null>(null);
+  const [repeatSaving, setRepeatSaving] = useState(false);
+  const [repeatError, setRepeatError] = useState("");
+  const dropInProgress = useRef(false);
   const [externalSelected, setExternalSelected] =
     useState<CalendarEvent | null>(null);
   const [hiddenExternal, setHiddenExternal] = useState<Set<string>>(new Set());
@@ -116,26 +185,62 @@ export default function CalendarWorkspace({ time }: { time: string }) {
     lastDraft = useRef(false);
   const days = useMemo(
     () =>
-      visibleDayRange(anchor, view, preferences.dayCount, preferences.weekends),
-    [anchor, view, preferences.dayCount, preferences.weekends],
+      view === "month"
+        ? daysForWeeks(
+            monthWindow.start,
+            monthWindowWeeks,
+            preferences.weekends,
+          )
+        : visibleDayRange(
+            anchor,
+            view,
+            preferences.dayCount,
+            preferences.weekends,
+          ),
+    [
+      anchor,
+      view,
+      monthWindow.start,
+      preferences.dayCount,
+      preferences.weekends,
+    ],
   );
   const start = days[0],
     end = shiftDay(days[days.length - 1], 1);
+  const repeatMode = repeatChange?.mode;
+  const hasRepeatChange = repeatChange !== null;
+  const pendingRepeat =
+    repeatChange && repeatChange.mode !== "new" ? repeatChange.change : null;
+  const reviewingRepeat = repeatMode === "pending" ? null : repeatChange;
   const external = useExternalCalendars(
     new URLSearchParams({
       start: atMidnight(start, preferences.zone),
       end: atMidnight(end, preferences.zone),
     }).toString(),
     reload,
+    view === "month",
   );
   useEffect(() => {
     if (!external.loading && !external.error)
-      setExternalSelected((current) =>
-        current
-          ? external.events.find((event) => event.id === current.id) || null
-          : null,
-      );
-  }, [external.events, external.loading, external.error]);
+      setExternalSelected((current) => {
+        if (!current) return null;
+        const refreshed = external.events.find(
+          (event) => event.id === current.id,
+        );
+        if (refreshed) return refreshed;
+        return view === "month" &&
+          !days.some((day) => overlapsDay(current, day, preferences.zone))
+          ? current
+          : null;
+      });
+  }, [
+    external.events,
+    external.loading,
+    external.error,
+    days,
+    preferences.zone,
+    view,
+  ]);
   useEffect(() => {
     try {
       localStorage.setItem(
@@ -147,6 +252,16 @@ export default function CalendarWorkspace({ time }: { time: string }) {
     }
   }, [preferences]);
   useEffect(() => {
+    try {
+      localStorage.setItem(
+        colorStorageKey,
+        JSON.stringify(Object.fromEntries(organizationColors)),
+      );
+    } catch {
+      /* The active calendar can still use the selected colors. */
+    }
+  }, [colorStorageKey, organizationColors]);
+  useEffect(() => {
     if (!expanded) return;
     const old = document.body.style.overflow;
     document.body.style.overflow = "hidden";
@@ -156,14 +271,14 @@ export default function CalendarWorkspace({ time }: { time: string }) {
   }, [expanded]);
   useEffect(() => {
     const warn = (e: BeforeUnloadEvent) => {
-      if (dirty) {
+      if (dirty || hasRepeatChange) {
         e.preventDefault();
         e.returnValue = "";
       }
     };
     window.addEventListener("beforeunload", warn);
     return () => window.removeEventListener("beforeunload", warn);
-  }, [dirty]);
+  }, [dirty, hasRepeatChange]);
   useEffect(() => {
     let frame: number | undefined;
     if (lastDraft.current && !draft)
@@ -179,10 +294,24 @@ export default function CalendarWorkspace({ time }: { time: string }) {
     };
   }, [draft]);
   useEffect(() => {
+    if (repeatMode !== "pending") return;
+    const frame = requestAnimationFrame(() => {
+      const previews = root.current?.querySelectorAll<HTMLButtonElement>(
+        "button[data-pending-move]",
+      );
+      const target =
+        previews &&
+        Array.from(previews).find((preview) => preview.getClientRects().length);
+      (target || root.current)?.focus();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [repeatMode]);
+  useEffect(() => {
     let alive = true;
+    if (!retainEventsOnRangeChange.current) setEvents([]);
+    retainEventsOnRangeChange.current = false;
     setLoading(true);
     setError("");
-    setEvents([]);
     Promise.all([
       api<{ units: CalendarUnit[] }>("/calendar/options"),
       api<{ events: CalendarEvent[] }>(
@@ -193,10 +322,14 @@ export default function CalendarWorkspace({ time }: { time: string }) {
         if (alive) {
           setUnits(options.units);
           setEvents(result.events);
+          setHasLoaded(true);
         }
       })
       .catch((e) => {
-        if (alive) setError((e as Error).message);
+        if (alive) {
+          setEvents([]);
+          setError((e as Error).message);
+        }
       })
       .finally(() => {
         if (alive) setLoading(false);
@@ -222,9 +355,11 @@ export default function CalendarWorkspace({ time }: { time: string }) {
     }
     void check();
     const id = setInterval(() => void check(), 60000);
+    window.addEventListener(remindersChanged, check);
     return () => {
       alive = false;
       clearInterval(id);
+      window.removeEventListener(remindersChanged, check);
     };
   }, [reload]);
   useEffect(() => {
@@ -278,19 +413,63 @@ export default function CalendarWorkspace({ time }: { time: string }) {
       units.map((u) => [u.org_id, { id: u.org_id, name: u.org_name }]),
     ).values(),
   );
-  const visible = [
-    ...events.filter((e) => checked === null || checked.has(e.org_id)),
+  const preview: DisplayedCalendarEvent | null = pendingRepeat && {
+    ...pendingRepeat.event,
+    starts_at: new Date(pendingRepeat.starts).toISOString(),
+    ends_at: new Date(pendingRepeat.ends).toISOString(),
+    occurrence_start: pendingRepeat.occurrenceStart,
+    instance_key: `${pendingRepeat.event.id}@${pendingRepeat.occurrenceStart}`,
+    pendingMove: true,
+  };
+  const visible: DisplayedCalendarEvent[] = [
+    ...events.filter((event) => eventKey(event) !== preview?.instance_key),
+    ...(preview &&
+    days.some((day) => overlapsDay(preview, day, preferences.zone))
+      ? [preview]
+      : []),
+  ].flatMap((event) => {
+    const displayCalendar = eventCalendars(event).find(
+      (target) => checked === null || checked.has(target.org_id),
+    );
+    if (!displayCalendar) return [];
+    return [
+      {
+        ...event,
+        displayCalendar,
+        displayColor:
+          event.color === "default"
+            ? organizationColors.get(displayCalendar.org_id)
+            : undefined,
+      },
+    ];
+  });
+  visible.push(
     ...external.events.filter((e) => !hiddenExternal.has(e.external_source!)),
-  ].sort((a, b) => Date.parse(a.starts_at) - Date.parse(b.starts_at));
+  );
+  visible.sort((a, b) => Date.parse(a.starts_at) - Date.parse(b.starts_at));
+  const agendaDays =
+    view === "month"
+      ? daysForWeeks(monthFirstWeek, monthVisibleWeeks, preferences.weekends)
+      : days;
+  const agendaEvents = visible.filter((event) =>
+    agendaDays.some((day) => overlapsDay(event, day, preferences.zone)),
+  );
+  const actionDay =
+    view === "month" && !agendaDays.includes(selected)
+      ? monthHeadingDay
+      : selected;
   const writable = units.filter((u) => u.can_create);
+  const defaultTarget =
+    writable.find((u) => checked === null || checked.has(u.org_id)) ||
+    writable[0];
   const defaultUnit =
-    writable.find((u) => checked === null || checked.has(u.org_id))?.id ||
-    writable[0]?.id ||
+    writable.find((u) => u.id === defaultTarget?.org_id)?.id ||
+    defaultTarget?.id ||
     "";
+  const headingDay = view === "month" ? monthHeadingDay : anchor;
+  const monthTitle = `${Number(headingDay.slice(0, 4))}년 ${Number(headingDay.slice(5, 7))}월`;
   const title =
-    view === "day"
-      ? `${Number(anchor.slice(0, 4))}년 ${Number(anchor.slice(5, 7))}월 ${Number(anchor.slice(8))}일`
-      : `${Number(anchor.slice(0, 4))}년 ${Number(anchor.slice(5, 7))}월`;
+    view === "day" ? `${monthTitle} ${Number(anchor.slice(8))}일` : monthTitle;
   function leave() {
     if (editorBusy) return false;
     return (
@@ -335,12 +514,22 @@ export default function CalendarWorkspace({ time }: { time: string }) {
       setDirty(false);
     }
   }
-  async function open(event: CalendarEvent) {
+  async function open(
+    target: DisplayedCalendarEvent | { id: string },
+    focus = false,
+  ) {
     if (!leave()) return;
-    if (event.external_source) {
+    const displayed = "starts_at" in target ? target : null;
+    if (displayed?.pendingMove && repeatChange) {
+      setRepeatError("");
+      setContext(null);
+      setRepeatChange({ ...repeatChange, mode: "review" });
+      return;
+    }
+    if (displayed?.external_source) {
       setDraft(null);
       setDirty(false);
-      setExternalSelected(event);
+      setExternalSelected(displayed);
       setSelectedEvent(null);
       setContext(null);
       setQuery("");
@@ -352,7 +541,16 @@ export default function CalendarWorkspace({ time }: { time: string }) {
     setError("");
     setContext(null);
     try {
-      const fresh = await api<CalendarEvent>(`/calendar/events/${event.id}`);
+      const fresh = await api<CalendarEvent>(`/calendar/events/${target.id}`);
+      const event = displayed ?? fresh;
+      const day = dayOf(
+        event.starts_at,
+        event.all_day ? "Asia/Seoul" : preferences.zone,
+      );
+      if (focus) {
+        setSelected(day);
+        focusDate(day);
+      }
       setQuery("");
       setRemindersOpen(false);
       setSelectedEvent(event);
@@ -362,10 +560,7 @@ export default function CalendarWorkspace({ time }: { time: string }) {
           fresh.all_day ? "Asia/Seoul" : fresh.time_zone,
         ),
         event: fresh,
-        occurrenceDay: dayOf(
-          event.starts_at,
-          event.all_day ? "Asia/Seoul" : preferences.zone,
-        ),
+        occurrenceDay: day,
       });
       setDirty(false);
       setPanel(true);
@@ -374,20 +569,50 @@ export default function CalendarWorkspace({ time }: { time: string }) {
       setError((e as Error).message);
     }
   }
+  useEffect(() => {
+    if (notification)
+      void open(notification.occurrence ?? { id: notification.id }, true);
+  }, [notification]);
+  function focusDate(day: string) {
+    retainEventsOnRangeChange.current = false;
+    setAnchor(day);
+    setMonthHeadingDay(day);
+    const week = monthWeekStart(day);
+    setMonthFirstWeek(week);
+    setMonthWindow(monthWindowFor({ week, fraction: 0 }));
+  }
+  function scrollMonth(position: MonthScrollPosition, centerWeek: string) {
+    setMonthFirstWeek(position.week);
+    setMonthHeadingDay(shiftDay(centerWeek, 3));
+    const index = weekOffset(monthWindow.start, position.week);
+    if (index <= 1 || index >= monthWindowWeeks - monthVisibleWeeks - 1) {
+      retainEventsOnRangeChange.current = true;
+      setMonthWindow(monthWindowFor(position));
+    }
+  }
+  function switchView(next: View) {
+    if (
+      view === "month" &&
+      next !== "month" &&
+      monthFirstWeek !== monthWeekStart(anchor)
+    )
+      focusDate(agendaDays.includes(selected) ? selected : monthHeadingDay);
+    setView(next);
+  }
   function navigate(direction: number) {
     const next =
       view === "month"
-        ? moveMonth(anchor, direction)
+        ? moveMonth(monthHeadingDay, direction)
         : shiftDay(
             anchor,
             direction * (view === "day" ? 1 : preferences.dayCount),
           );
-    setAnchor(next);
+    focusDate(next);
     setSelected(next);
     setNotice("");
   }
   function goToday() {
-    setAnchor(today);
+    focusDate(today);
     setSelected(today);
     setNotice("");
   }
@@ -403,11 +628,20 @@ export default function CalendarWorkspace({ time }: { time: string }) {
       : dayOf(event.starts_at, event.all_day ? "Asia/Seoul" : preferences.zone);
     setDirty(false);
     setDraft(null);
-    setAnchor(selectedDay);
+    if (view === "month" && agendaDays.includes(selectedDay))
+      setAnchor(selectedDay);
+    else focusDate(selectedDay);
     setSelected(selectedDay);
-    if (checked !== null) setChecked(new Set([...checked, event.org_id]));
+    setChecked(
+      (current) =>
+        current &&
+        new Set([
+          ...current,
+          ...eventCalendars(event).map((target) => target.org_id),
+        ]),
+    );
     hideSmallPanel();
-    setNotice("일정을 저장했습니다.");
+    setNotice("");
     setReload((r) => r + 1);
   }
   function copy(event: CalendarEvent) {
@@ -421,14 +655,29 @@ export default function CalendarWorkspace({ time }: { time: string }) {
   function paste(day: string) {
     if (!clipboard || !writable.length || !leave()) return;
     setExternalSelected(null);
-    const same = writable.some((u) => u.id === clipboard.unit_id);
+    const originalTargets = eventCalendars(clipboard);
+    const targets = originalTargets.filter((target) =>
+      writable.some((unit) => unit.id === target.unit_id),
+    );
+    const fallback = writable.find((unit) => unit.id === defaultUnit);
+    if (!targets.length && fallback)
+      targets.push({
+        unit_id: fallback.id,
+        unit_name: fallback.name,
+        org_id: fallback.org_id,
+        org_name: fallback.org_name,
+      });
     setQuery("");
     setDraft({
       day,
       copy: {
         ...clipboard,
-        unit_id: same ? clipboard.unit_id : defaultUnit,
-        participant_ids: same ? clipboard.participant_ids : [],
+        calendars: targets,
+        participant_ids: originalTargets.every((target) =>
+          targets.some((next) => next.unit_id === target.unit_id),
+        )
+          ? clipboard.participant_ids
+          : [],
       },
     });
     setSelected(day);
@@ -437,10 +686,10 @@ export default function CalendarWorkspace({ time }: { time: string }) {
     setPanelForced(true);
     setContext(null);
   }
-  function menu(e: MouseEvent, day: string, event?: CalendarEvent) {
+  function menu(e: MouseEvent, day: string, event?: DisplayedCalendarEvent) {
     e.preventDefault();
     e.stopPropagation();
-    if (event?.external_source) {
+    if (event?.external_source || event?.pendingMove) {
       void open(event);
       return;
     }
@@ -456,33 +705,36 @@ export default function CalendarWorkspace({ time }: { time: string }) {
     e.preventDefault();
     e.stopPropagation();
     const raw = e.dataTransfer.getData("application/yeonieum-event");
-    if (!raw || !leave()) return;
+    if (!raw || dropInProgress.current || reviewingRepeat || !leave()) return;
+    dropInProgress.current = true;
     try {
       const action = JSON.parse(raw) as CalendarDrag;
+      if (
+        pendingRepeat &&
+        (action.id !== pendingRepeat.event.id ||
+          action.occurrenceStart !== pendingRepeat.occurrenceStart)
+      ) {
+        setRepeatError("");
+        setRepeatChange((current) => current && { ...current, mode: "review" });
+        return;
+      }
       const event = await api<CalendarEvent>(`/calendar/events/${action.id}`);
       if (!event.can_edit) return;
-      if (
-        event.recurrence &&
-        !window.confirm("반복 일정의 전체 시리즈에 변경을 적용할까요?")
-      )
+      if (event.revision !== action.revision) {
+        setError("일정이 변경되었습니다. 다시 불러온 뒤 이동해 주세요.");
         return;
-      const occurrence = Date.parse(action.start);
+      }
+      const draggedStart = Date.parse(action.start);
+      const draggedEnd = Date.parse(action.end);
+      const previousStart = pendingRepeat?.previousStart ?? draggedStart;
+      const previousEnd = pendingRepeat?.previousEnd ?? draggedEnd;
       let starts: number, ends: number;
       if (action.operation === "resize") {
         const endAt = Date.parse(
-          localInstant(
-            day,
-            `${Math.floor((minute ?? 600) / 60)
-              .toString()
-              .padStart(
-                2,
-                "0",
-              )}:${((minute ?? 600) % 60).toString().padStart(2, "0")}`,
-            preferences.zone,
-          ),
+          localInstant(day, minuteTime(minute ?? 600), preferences.zone),
         );
-        starts = Date.parse(event.starts_at);
-        ends = starts + (endAt - occurrence);
+        starts = draggedStart;
+        ends = endAt;
         if (ends <= starts) {
           setError("종료는 시작 이후여야 합니다.");
           return;
@@ -491,17 +743,8 @@ export default function CalendarWorkspace({ time }: { time: string }) {
         const delta =
           minute !== undefined && !event.all_day
             ? Date.parse(
-                localInstant(
-                  day,
-                  `${Math.floor(minute / 60)
-                    .toString()
-                    .padStart(
-                      2,
-                      "0",
-                    )}:${(minute % 60).toString().padStart(2, "0")}`,
-                  preferences.zone,
-                ),
-              ) - occurrence
+                localInstant(day, minuteTime(minute), preferences.zone),
+              ) - draggedStart
             : Date.parse(atMidnight(day)) -
               Date.parse(
                 atMidnight(
@@ -511,30 +754,93 @@ export default function CalendarWorkspace({ time }: { time: string }) {
                   ),
                 ),
               );
-        starts = Date.parse(event.starts_at) + delta;
-        ends = Date.parse(event.ends_at) + delta;
+        starts = draggedStart + delta;
+        ends = draggedEnd + delta;
       }
+      if (starts === draggedStart && ends === draggedEnd) return;
+      if (starts === previousStart && ends === previousEnd) {
+        setRepeatChange(null);
+        return;
+      }
+      const change: DropChange = {
+        event,
+        operation: starts === previousStart ? "resize" : "move",
+        occurrenceStart: action.occurrenceStart,
+        previousStart,
+        previousEnd,
+        day,
+        starts,
+        ends,
+      };
+      if (event.recurrence) {
+        setRepeatError("");
+        if (pendingRepeat && repeatChange) {
+          setRepeatChange({ ...repeatChange, change });
+          setSelected(day);
+        } else setRepeatChange({ change, scope: "single", mode: "new" });
+      } else await saveDrop(change);
+    } catch (error) {
+      setError((error as Error).message);
+    } finally {
+      dropInProgress.current = false;
+    }
+  }
+  function continueRepeatChange(change: DropChange, scope: OccurrenceScope) {
+    setDraft(null);
+    setDirty(false);
+    setExternalSelected(null);
+    setSelectedEvent(null);
+    setQuery("");
+    setSelected(change.day);
+    hideSmallPanel();
+    setRepeatChange({ change, scope, mode: "pending" });
+  }
+  async function saveDrop(
+    { event, day, starts, ends, occurrenceStart }: DropChange,
+    scope?: OccurrenceScope,
+  ) {
+    const period = {
+      starts_at: new Date(starts).toISOString(),
+      ends_at: new Date(ends).toISOString(),
+      expected_revision: event.revision,
+    };
+    if (scope) {
+      await api(`/calendar/events/${event.id}/occurrence`, {
+        ...period,
+        scope,
+        occurrence_start: occurrenceStart,
+      });
+    } else {
       await api(`/calendar/events/${event.id}/update`, {
+        ...period,
         unit_id: event.unit_id,
         title: event.title,
         description: event.description,
         location: event.location,
         all_day: event.all_day,
-        starts_at: new Date(starts).toISOString(),
-        ends_at: new Date(ends).toISOString(),
-        expected_revision: event.revision,
       });
-      setDraft(null);
-      setDirty(false);
-      setSelected(day);
-      setNotice(
-        action.operation === "resize"
-          ? "일정 시간을 변경했습니다."
-          : "일정을 이동했습니다.",
-      );
-      setReload((r) => r + 1);
+    }
+    setDraft(null);
+    setDirty(false);
+    setSelected(day);
+    setNotice("");
+    setReload((r) => r + 1);
+  }
+  async function confirmRepeatChange(
+    change: DropChange,
+    scope: OccurrenceScope,
+  ) {
+    if (dropInProgress.current) return;
+    dropInProgress.current = true;
+    setRepeatSaving(true);
+    try {
+      await saveDrop(change, scope);
+      setRepeatChange(null);
     } catch (error) {
-      setError((error as Error).message);
+      setRepeatError((error as Error).message);
+    } finally {
+      setRepeatSaving(false);
+      dropInProgress.current = false;
     }
   }
   function showSearch() {
@@ -544,6 +850,7 @@ export default function CalendarWorkspace({ time }: { time: string }) {
   }
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
+      if (reviewingRepeat) return;
       const target = e.target as HTMLElement;
       const input = target.closest(
         "input,textarea,select,[contenteditable=true]",
@@ -563,7 +870,7 @@ export default function CalendarWorkspace({ time }: { time: string }) {
           copy(selectedEvent);
         } else if (e.key.toLowerCase() === "v" && clipboard) {
           e.preventDefault();
-          paste(selected);
+          paste(actionDay);
         }
         return;
       }
@@ -571,16 +878,16 @@ export default function CalendarWorkspace({ time }: { time: string }) {
       switch (e.key.toLowerCase()) {
         case "c":
           e.preventDefault();
-          add(selected);
+          add(actionDay);
           break;
         case "d":
-          setView("day");
+          switchView("day");
           break;
         case "w":
-          setView("week");
+          switchView("week");
           break;
         case "m":
-          setView("month");
+          switchView("month");
           break;
         case "t":
           goToday();
@@ -638,10 +945,10 @@ export default function CalendarWorkspace({ time }: { time: string }) {
     return () => window.removeEventListener("keydown", key);
   });
   const actions = [
-    { label: "새 이벤트 만들기", key: "C", run: () => add(selected) },
-    { label: "일 보기", key: "D", run: () => setView("day") },
-    { label: "주 보기", key: "W", run: () => setView("week") },
-    { label: "월 보기", key: "M", run: () => setView("month") },
+    { label: "새 이벤트 만들기", key: "C", run: () => add(actionDay) },
+    { label: "일 보기", key: "D", run: () => switchView("day") },
+    { label: "주 보기", key: "W", run: () => switchView("week") },
+    { label: "월 보기", key: "M", run: () => switchView("month") },
     { label: "오늘로 이동", key: "T", run: goToday },
     { label: "날짜로 이동", key: ".", run: () => setJump(true) },
     { label: "이벤트 검색", key: "/", run: showSearch },
@@ -686,7 +993,7 @@ export default function CalendarWorkspace({ time }: { time: string }) {
             ref={addButton}
             className="primary calendar-add"
             disabled={loading || !writable.length}
-            onClick={() => add(selected)}
+            onClick={() => add(actionDay)}
           >
             ＋ 일정 추가
           </button>
@@ -696,11 +1003,11 @@ export default function CalendarWorkspace({ time }: { time: string }) {
         {sidebar && (
           <aside className="calendar-sidebar">
             <MiniCalendar
-              anchor={anchor}
+              anchor={view === "month" ? monthHeadingDay : anchor}
               selected={selected}
               today={today}
               onSelect={(day) => {
-                setAnchor(day);
+                focusDate(day);
                 setSelected(day);
               }}
             />
@@ -717,15 +1024,21 @@ export default function CalendarWorkspace({ time }: { time: string }) {
               </button>
             </div>
             {orgs.map((org) => (
-              <label className="calendar-scope" key={org.id}>
-                <input
-                  type="checkbox"
-                  checked={checked === null || checked.has(org.id)}
-                  onChange={() => toggleOrg(org.id)}
-                />
-                <i className={`calendar-dot calendar-tone-${tone(org.id)}`} />
-                <span>{org.name}</span>
-              </label>
+              <CalendarScopeRow
+                key={org.id}
+                org={org}
+                visible={checked === null || checked.has(org.id)}
+                color={organizationColors.get(org.id)}
+                onToggle={() => toggleOrg(org.id)}
+                onColorChange={(color) =>
+                  setOrganizationColors((current) => {
+                    const next = new Map(current);
+                    if (color) next.set(org.id, color);
+                    else next.delete(org.id);
+                    return next;
+                  })
+                }
+              />
             ))}
             {!loading && !units.length && (
               <p className="calendar-no-role">
@@ -787,7 +1100,7 @@ export default function CalendarWorkspace({ time }: { time: string }) {
               <select
                 aria-label="캘린더 보기"
                 value={view}
-                onChange={(e) => setView(e.target.value as View)}
+                onChange={(e) => switchView(e.target.value as View)}
               >
                 <option value="day">일</option>
                 <option value="week">주</option>
@@ -907,7 +1220,11 @@ export default function CalendarWorkspace({ time }: { time: string }) {
                                 minutes: r.minutes,
                               },
                             )
-                              .then(() => setReload((n) => n + 1))
+                              .then(() =>
+                                window.dispatchEvent(
+                                  new Event(remindersChanged),
+                                ),
+                              )
                               .catch((e) =>
                                 setReminderError((e as Error).message),
                               );
@@ -952,7 +1269,7 @@ export default function CalendarWorkspace({ time }: { time: string }) {
               {notice}
             </p>
           )}
-          {loading && (
+          {loading && (!hasLoaded || view !== "month") && (
             <p className="calendar-loading" role="status">
               일정을 불러오고 있습니다…
             </p>
@@ -962,6 +1279,7 @@ export default function CalendarWorkspace({ time }: { time: string }) {
             aria-busy={loading}
             onPointerDownCapture={(e) => {
               if (
+                view === "month" ||
                 (!draft && !externalSelected) ||
                 e.button !== 0 ||
                 (e.target as HTMLElement).closest(
@@ -984,6 +1302,7 @@ export default function CalendarWorkspace({ time }: { time: string }) {
               dismissPointer.current = false;
             }}
             onClickCapture={(e) => {
+              if (view === "month") return;
               if (dismissPointer.current) {
                 dismissPointer.current = false;
                 e.preventDefault();
@@ -1004,7 +1323,9 @@ export default function CalendarWorkspace({ time }: { time: string }) {
             {view === "month" ? (
               <MonthGrid
                 days={days}
-                anchor={anchor}
+                windowStart={monthWindow.start}
+                position={monthWindow.position}
+                anchor={monthHeadingDay}
                 today={today}
                 selected={selected}
                 events={visible}
@@ -1014,6 +1335,10 @@ export default function CalendarWorkspace({ time }: { time: string }) {
                 onOpen={(event) => void open(event)}
                 onContext={menu}
                 onDrop={(e, day, minute) => void drop(e, day, minute)}
+                onScrollWeek={scrollMonth}
+                onBlankClick={
+                  draft || externalSelected ? clearCanvasEditor : undefined
+                }
               />
             ) : (
               <TimeGrid
@@ -1034,21 +1359,37 @@ export default function CalendarWorkspace({ time }: { time: string }) {
             aria-label="이 기간의 일정"
           >
             <h3>
-              이 기간의 일정 <span>{visible.length}</span>
+              이 기간의 일정 <span>{agendaEvents.length}</span>
             </h3>
-            {visible.length ? (
+            {agendaEvents.length ? (
               <ul>
-                {visible.map((event) => (
+                {agendaEvents.map((event) => (
                   <li key={eventKey(event)}>
                     <button
                       onClick={() => void open(event)}
-                      aria-label={`${event.title} 상세 보기`}
+                      aria-label={`${event.title} ${event.pendingMove ? "저장 전 변경 확인" : "상세 보기"}`}
+                      data-pending-move={event.pendingMove}
                     >
                       <i
-                        className={`calendar-dot calendar-tone-${tone(event.org_id)}`}
+                        className={`calendar-dot calendar-tone-${tone(event.displayCalendar?.org_id || event.org_id)}`}
+                        style={
+                          event.displayColor
+                            ? {
+                                background: calendarColorHex(
+                                  event.displayCalendar?.org_id || event.org_id,
+                                  event.displayColor,
+                                ),
+                              }
+                            : undefined
+                        }
                       />
                       <span>
-                        <strong>{event.title}</strong>
+                        <strong>
+                          {event.pendingMove && (
+                            <i className="cal-pending-dot" aria-hidden="true" />
+                          )}
+                          {event.title}
+                        </strong>
                         <small>
                           {longDay(
                             dayOf(
@@ -1064,7 +1405,7 @@ export default function CalendarWorkspace({ time }: { time: string }) {
                                 preferences.hour24,
                                 preferences.zone,
                               )}{" "}
-                          · {event.org_name}
+                          · {event.displayCalendar?.org_name || event.org_name}
                         </small>
                       </span>
                     </button>
@@ -1076,8 +1417,11 @@ export default function CalendarWorkspace({ time }: { time: string }) {
             )}
           </section>
           <div className="calendar-bottom">
-            <span>날짜 우클릭으로 이벤트 만들기 · 드래그로 일정 이동</span>
-            <small>일정 {visible.length}개</small>
+            <span>
+              {view === "month" && "세로 스크롤·빈 곳 드래그로 주 이동 · "}
+              날짜 우클릭으로 이벤트 만들기 · 드래그로 일정 이동
+            </span>
+            <small>일정 {agendaEvents.length}개</small>
           </div>
         </div>
         {panel && (
@@ -1117,13 +1461,19 @@ export default function CalendarWorkspace({ time }: { time: string }) {
                   <p>검색 결과가 없습니다.</p>
                 )}
                 {searchResults
-                  .filter((e) => checked === null || checked.has(e.org_id))
+                  .filter(
+                    (event) =>
+                      checked === null ||
+                      eventCalendars(event).some((target) =>
+                        checked.has(target.org_id),
+                      ),
+                  )
                   .map((event) => (
                     <button
                       key={event.id}
                       onClick={() => {
                         if (!leave()) return;
-                        setAnchor(dayOf(event.starts_at));
+                        focusDate(dayOf(event.starts_at));
                         setSelected(dayOf(event.starts_at));
                         setQuery("");
                         void open(event);
@@ -1153,6 +1503,7 @@ export default function CalendarWorkspace({ time }: { time: string }) {
                 draft={draft}
                 units={units}
                 defaultUnit={defaultUnit}
+                organizationColors={organizationColors}
                 defaultZone={preferences.zone}
                 onClose={closeEditor}
                 onSaved={saved}
@@ -1161,7 +1512,7 @@ export default function CalendarWorkspace({ time }: { time: string }) {
                   setDirty(false);
                   hideSmallPanel();
                   setSelectedEvent(null);
-                  setNotice("일정을 삭제했습니다.");
+                  setNotice("");
                   setReload((r) => r + 1);
                 }}
                 onDirty={setDirty}
@@ -1246,6 +1597,22 @@ export default function CalendarWorkspace({ time }: { time: string }) {
         onClose={() => setCommands(false)}
         actions={actions}
       />
+      {reviewingRepeat && (
+        <RepeatChangeDialog
+          change={reviewingRepeat.change}
+          initialScope={reviewingRepeat.scope}
+          preferences={preferences}
+          saving={repeatSaving}
+          error={repeatError}
+          onCancel={() => setRepeatChange(null)}
+          onContinue={(scope) =>
+            continueRepeatChange(reviewingRepeat.change, scope)
+          }
+          onConfirm={(scope) =>
+            void confirmRepeatChange(reviewingRepeat.change, scope)
+          }
+        />
+      )}
       <dialog
         ref={jumpDialog}
         className="cal-jump-dialog"
@@ -1258,7 +1625,7 @@ export default function CalendarWorkspace({ time }: { time: string }) {
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            setAnchor(jumpDay);
+            focusDate(jumpDay);
             setSelected(jumpDay);
             setJump(false);
           }}

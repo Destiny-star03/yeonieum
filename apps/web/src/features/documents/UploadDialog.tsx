@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { seoulYear } from "../../shared/tenure";
 import FileDropzone from "./FileDropzone";
+import UploadQueue, { type QueuedUpload } from "./UploadQueue";
 import {
   uploadFile,
   type LibraryDocument,
@@ -21,7 +22,7 @@ export default function UploadDialog({
   options: LibraryOptions;
   time: string;
   onClose: () => void;
-  onSaved: (id: string) => Promise<void>;
+  onSaved: (ids: string[]) => Promise<void>;
   defaults?: Partial<LibraryMetadata>;
   folderName?: string;
 }) {
@@ -37,28 +38,54 @@ export default function UploadDialog({
     audience: "private",
     ...defaults,
   });
-  const [file, setFile] = useState<File | null>(null),
+  const [entries, setEntries] = useState<QueuedUpload[]>([]),
     [note, setNote] = useState("");
   const [busy, setBusy] = useState(false),
     [error, setError] = useState("");
-  const [uploadedId, setUploadedId] = useState("");
+  const [processing, setProcessing] = useState<number | null>(null);
+  const [started, setStarted] = useState(false);
+  const nextKey = useRef(0);
   const titleEdited = useRef(false);
   const [locationOpen, setLocationOpen] = useState(false);
   const selected = options.units.find((u) => u.id === metadata.unit_id);
-  const locked = busy || Boolean(uploadedId);
+  const locked = busy || started;
   const isNew = target === "new";
-  function chooseFile(next: File | null) {
-    setFile(next);
+  const allStored =
+    entries.length > 0 && entries.every((entry) => entry.resultId);
+  function updateEntry(key: number, patch: Partial<QueuedUpload>) {
+    setEntries((rows) =>
+      rows.map((entry) => (entry.key === key ? { ...entry, ...patch } : entry)),
+    );
+  }
+  function addFiles(files: File[]) {
     setError("");
-    if (next && !titleEdited.current) {
-      const dot = next.name.lastIndexOf(".");
-      const title = (dot > 0 ? next.name.slice(0, dot) : next.name)
-        .trim()
-        .slice(0, 150);
-      setMetadata((old) => ({
-        ...old,
-        title: title || next.name.slice(0, 150),
-      }));
+    const added = files.map((file, index) => ({
+      key: nextKey.current++,
+      file,
+      title:
+        !entries.length &&
+        index === 0 &&
+        titleEdited.current &&
+        metadata.title.trim()
+          ? metadata.title
+          : (file.name.replace(/\.[^.]+$/, "").trim() || file.name).slice(
+              0,
+              150,
+            ),
+    }));
+    setEntries((rows) => [...rows, ...added]);
+  }
+  function removeEntry(key: number) {
+    const remaining = entries.filter((entry) => entry.key !== key);
+    setEntries(remaining);
+    setError("");
+    if (!remaining.length) {
+      setStarted(false);
+      window.requestAnimationFrame(() =>
+        dialog.current
+          ?.querySelector<HTMLButtonElement>(".library-dropzone button")
+          ?.focus(),
+      );
     }
   }
   useEffect(() => {
@@ -66,7 +93,7 @@ export default function UploadDialog({
   }, []);
   async function submit(e: FormEvent) {
     e.preventDefault();
-    if (!file) return;
+    if (busy || !entries.length) return;
     if (
       isNew &&
       (!metadata.unit_id ||
@@ -79,30 +106,57 @@ export default function UploadDialog({
       return;
     }
     setBusy(true);
+    setStarted(true);
     setError("");
-    let savedId = uploadedId;
+    const ids: string[] = [];
+    let failures = 0;
     try {
-      if (!savedId) {
-        const result = await uploadFile(
-          file,
-          target === "new"
-            ? { ...metadata, category: metadata.category.trim() || "일반 자료" }
-            : null,
-          target === "new" ? null : target,
-          note,
-        );
-        savedId = result.id;
-        setUploadedId(savedId);
+      for (const entry of entries) {
+        if (entry.resultId) {
+          ids.push(entry.resultId);
+          continue;
+        }
+        setProcessing(entry.key);
+        updateEntry(entry.key, { error: undefined });
+        try {
+          const result = await uploadFile(
+            entry.file,
+            isNew
+              ? {
+                  ...metadata,
+                  title: entry.title,
+                  category: metadata.category.trim() || "일반 자료",
+                }
+              : null,
+            isNew ? null : target,
+            note,
+            {
+              maxSize: options.max_size,
+              sessionId: entry.sessionId,
+              onPrepared: (sessionId) => updateEntry(entry.key, { sessionId }),
+            },
+          );
+          ids.push(result.id);
+          updateEntry(entry.key, { resultId: result.id });
+        } catch (reason) {
+          failures++;
+          const message = (reason as Error).message;
+          updateEntry(entry.key, { error: message });
+          if (!isNew) setError(message);
+        }
       }
-      await onSaved(savedId);
-      onClose();
+      if (ids.length) await onSaved(ids);
+      if (!failures) onClose();
+      else if (isNew)
+        setError(
+          `${ids.length}개 등록 · ${failures}개 실패. 등록되지 않은 파일만 다시 시도합니다.`,
+        );
     } catch (e) {
       setError(
-        savedId
-          ? `파일 저장은 완료됐습니다. 화면 갱신을 다시 시도해 주세요. ${(e as Error).message}`
-          : (e as Error).message,
+        `저장한 파일 ${ids.length}개의 화면 갱신을 다시 시도해 주세요. ${(e as Error).message}`,
       );
     } finally {
+      setProcessing(null);
       setBusy(false);
     }
   }
@@ -125,7 +179,7 @@ export default function UploadDialog({
             </h2>
             <p>
               {isNew
-                ? "파일을 선택하면 제목은 자동으로 채워집니다."
+                ? "파일을 선택하면 파일 이름으로 제목이 채워집니다."
                 : "이전 파일은 그대로 보존하고 새 버전을 추가합니다."}
             </p>
           </div>
@@ -139,10 +193,40 @@ export default function UploadDialog({
             ✕
           </button>
         </div>
-        <fieldset
-          disabled={busy || Boolean(uploadedId)}
-          className="library-upload-fields"
-        >
+        {isNew ? (
+          <>
+            <FileDropzone
+              count={entries.length}
+              onAdd={addFiles}
+              disabled={locked}
+              maxSize={options.max_size}
+              extensions={options.extensions}
+            />
+            <UploadQueue
+              entries={entries}
+              processing={processing}
+              busy={busy}
+              locked={locked}
+              onTitle={(key, title) => updateEntry(key, { title })}
+              onRemove={removeEntry}
+            />
+          </>
+        ) : (
+          <FileDropzone
+            file={entries[0]?.file || null}
+            extensions={options.extensions}
+            disabled={busy || allStored}
+            maxSize={options.max_size}
+            onChange={(file) => {
+              setEntries(
+                file ? [{ key: nextKey.current++, file, title: "" }] : [],
+              );
+              setStarted(false);
+              setError("");
+            }}
+          />
+        )}
+        <fieldset disabled={locked} className="library-upload-fields">
           {isNew ? (
             <>
               <div className="library-upload-location">
@@ -218,19 +302,25 @@ export default function UploadDialog({
                 </div>
               )}
               <div className="library-upload-basics">
-                <label>
-                  자료 제목
-                  <input
-                    maxLength={150}
-                    required
-                    value={metadata.title}
-                    placeholder="파일 이름에서 자동 입력"
-                    onChange={(e) => {
-                      titleEdited.current = true;
-                      setMetadata({ ...metadata, title: e.target.value });
-                    }}
-                  />
-                </label>
+                {entries.length < 2 && (
+                  <label>
+                    자료 제목
+                    <input
+                      maxLength={150}
+                      required
+                      value={entries[0]?.title ?? metadata.title}
+                      placeholder="파일 이름에서 자동 입력"
+                      onChange={(e) => {
+                        titleEdited.current = true;
+                        if (entries[0])
+                          updateEntry(entries[0].key, {
+                            title: e.target.value,
+                          });
+                        setMetadata({ ...metadata, title: e.target.value });
+                      }}
+                    />
+                  </label>
+                )}
                 <label>
                   열람 대상
                   <select
@@ -266,12 +356,6 @@ export default function UploadDialog({
               </small>
             </div>
           )}
-          <FileDropzone
-            file={file}
-            extensions={options.extensions}
-            disabled={locked}
-            onChange={chooseFile}
-          />
           {isNew ? (
             <details className="library-upload-extra">
               <summary>
@@ -365,15 +449,21 @@ export default function UploadDialog({
             className="primary"
             disabled={
               busy ||
-              !file ||
-              (isNew && (!metadata.unit_id || !metadata.title.trim()))
+              !entries.length ||
+              (isNew &&
+                (!metadata.unit_id ||
+                  entries.some((entry) => !entry.title.trim())))
             }
           >
             {busy
               ? "처리 중…"
-              : uploadedId
+              : allStored
                 ? "저장 결과 다시 확인"
-                : "파일 등록"}
+                : started
+                  ? "실패한 파일 다시 시도"
+                  : entries.length > 1
+                    ? `파일 ${entries.length}개 등록`
+                    : "파일 등록"}
           </button>
         </div>
       </form>

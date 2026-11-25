@@ -7,6 +7,7 @@ type Name =
   | "activity"
   | "arrow"
   | "logout"
+  | "bell"
   | "chevron";
 const paths: Record<Name, string> = {
   overview: "M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z",
@@ -20,6 +21,7 @@ const paths: Record<Name, string> = {
   activity: "M3 12a9 9 0 1 0 3-6.7 M3 3v5h5 M12 7v5l3 2",
   arrow: "M5 12h14 M13 6l6 6-6 6",
   logout: "M9 4H4v16h5 M13 8l4 4-4 4 M8 12h13",
+  bell: "M18 8a6 6 0 0 0-12 0c0 7-2 8-2 9h16c0-1-2-2-2-9z M10 20a2 2 0 0 0 4 0",
   chevron: "M14 6l-6 6 6 6",
 };
 export default function WorkspaceIcon({

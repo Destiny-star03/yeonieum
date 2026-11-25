@@ -52,6 +52,35 @@ async function openTimeSettings(editor: Locator) {
     await toggle.click();
 }
 
+function calendarPicker(editor: Locator) {
+  return editor.getByRole("button", {
+    name: "캘린더 · 공개 범위 및 일정 색상",
+    exact: true,
+  });
+}
+
+function calendarMenu(page: Page) {
+  return page.getByRole("dialog", { name: "캘린더 및 일정 색상 선택" });
+}
+
+async function selectOnlyCalendar(menu: Locator, name: string) {
+  const all = menu.getByRole("button", { name: "전체", exact: true });
+  if ((await all.getAttribute("aria-pressed")) === "false") await all.click();
+  await all.click();
+  const option = menu.getByRole("button", {
+    name,
+    exact: true,
+  });
+  await option.click();
+  return option;
+}
+
+async function selectCalendar(editor: Locator, name: string) {
+  await calendarPicker(editor).click();
+  const option = await selectOnlyCalendar(calendarMenu(editor.page()), name);
+  await option.press("Escape");
+}
+
 test("달력 빈 곳을 누르면 편집을 마치고 기본 안내로 돌아가며 저장 중에는 닫지 않는다", async ({
   page,
 }) => {
@@ -162,7 +191,8 @@ test("종일·시간대·반복은 요약 줄에서 펼치고 접어도 입력�
   await expect(toggle).toHaveAttribute("aria-expanded", "true");
   await expect(allDay).toBeVisible();
   await expect(zone).toBeVisible();
-  await expect(repeat).toHaveText("↻반복⌄");
+  await expect(repeat).toHaveText("반복⌄");
+  await expect(repeat.locator("svg[aria-hidden=true]")).toBeVisible();
   await editor.locator("fieldset").first().screenshot({
     path: "../../local-data/preview/calendar-settings-expanded.png",
   });
@@ -232,9 +262,21 @@ test("요일 반복 메뉴와 사용자 지정에서 간격·여러 요일·종�
     exact: true,
   });
   await trigger.click();
-  await page
-    .getByRole("menuitemradio", { name: "평일마다 월~금", exact: true })
-    .click();
+  const weekdays = page.getByRole("menuitemradio", {
+    name: "평일마다 월~금",
+    exact: true,
+  });
+  const detail = weekdays.getByText("월~금", { exact: true });
+  const durationColor = await editor
+    .getByLabel("일정 길이")
+    .evaluate((element) => getComputedStyle(element).color);
+  await expect(detail).toHaveCSS("color", durationColor);
+  expect(
+    await detail.evaluate((element) =>
+      parseFloat(getComputedStyle(element).fontSize),
+    ),
+  ).toBeCloseTo(12 + 4 / 3, 3);
+  await weekdays.click();
   await expect(trigger).toContainText("월·화·수·목·금");
   await trigger.click();
   await page
@@ -293,7 +335,7 @@ test("요일 반복 메뉴와 사용자 지정에서 간격·여러 요일·종�
   }
 });
 
-test("일정 색상을 점 팔레트로 선택·저장하고 기본색으로 되돌린다", async ({
+test("단체 기본색을 저장하고 개별 일정 색에 우선 적용하지 않는다", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1600, height: 1000 });
@@ -308,20 +350,33 @@ test("일정 색상을 점 팔레트로 선택·저장하고 기본색으로 되
     .getByRole("dialog")
     .filter({ has: page.getByLabel("일정 제목") });
   await editor.getByLabel("일정 제목").fill("가상 색상 선택 확인");
-  const trigger = editor.getByRole("button", {
-    name: "일정 색상",
-    exact: true,
-  });
+  if (
+    await page.evaluate(
+      () =>
+        CSS.supports("appearance", "base-select") &&
+        CSS.supports("selector(::picker(select))"),
+    )
+  ) {
+    const status = editor.getByLabel("상태", { exact: true });
+    await status.click();
+    const statusBox = (await status.boundingBox())!;
+    const optionBox = (await status
+      .locator('option[value="free"]')
+      .boundingBox())!;
+    expect(optionBox.width).toBeGreaterThan(0);
+    expect(optionBox.x + optionBox.width).toBeLessThan(statusBox.x);
+    await page.keyboard.press("Escape");
+  }
+  const trigger = calendarPicker(editor);
   await trigger.click();
-  const palette = page.getByRole("dialog", {
-    name: "일정 색상 선택",
-    exact: true,
-  });
-  await expect(
-    palette.getByRole("radio", { name: "단체 기본색", exact: true }),
-  ).toBeFocused();
+  const palette = calendarMenu(page);
+  await expect(palette.locator('button[aria-pressed="true"]')).toBeFocused();
+  const triggerBox = (await trigger.boundingBox())!;
+  const paletteBox = (await palette.boundingBox())!;
+  expect(paletteBox.x + paletteBox.width).toBeLessThan(triggerBox.x);
+  await selectOnlyCalendar(palette, "학과협의회");
   await palette.getByRole("radio", { name: "빨강", exact: true }).click();
-  await expect(trigger).toContainText("빨강");
+  await expect(trigger).toHaveAttribute("title", "빨강");
   await expect(trigger).toBeFocused();
   await trigger.click();
   await expect(
@@ -352,8 +407,29 @@ test("일정 색상을 점 팔레트로 선택·저장하고 기본색으로 되
     exact: true,
   });
   await expect(event).toHaveClass(/cal-color-red/);
+  const orgColor = page.getByRole("button", {
+    name: "학과협의회 기본색 선택",
+    exact: true,
+  });
+  const orgPalette = page.getByRole("dialog", {
+    name: "학과협의회 기본색",
+    exact: true,
+  });
+  await orgColor.click();
+  await expect(orgPalette).toBeVisible();
+  const reset = orgPalette.getByRole("radio", {
+    name: "기본색으로 되돌리기",
+    exact: true,
+  });
+  await expect(reset).toBeFocused();
+  await orgPalette.getByRole("radio", { name: "파랑", exact: true }).click();
+  await expect(orgColor.locator(".cal-scope-swatch")).toHaveCSS(
+    "background-color",
+    "rgb(82, 127, 206)",
+  );
+  await expect(event).toHaveClass(/cal-color-red/);
   await event.click();
-  await expect(trigger).toContainText("빨강");
+  await expect(trigger).toHaveAttribute("title", "빨강");
   for (const width of [390, 320]) {
     await page.setViewportSize({ width, height: 900 });
     await trigger.click();
@@ -363,11 +439,117 @@ test("일정 색상을 점 팔레트로 선택·저장하고 기본색으로 되
     await palette.getByRole("radio", { name: "초록", exact: true }).click();
   }
   await trigger.click();
+  await expect(palette.locator(".cal-color-default > i")).toHaveCSS(
+    "background-color",
+    "rgb(82, 127, 206)",
+  );
   await palette
     .getByRole("radio", { name: "단체 기본색", exact: true })
     .click();
   await editor.getByRole("button", { name: "변경 저장", exact: true }).click();
+  await expect(event).toHaveClass(/cal-color-blue/);
+  const stored = await page.request.get(
+    "/api/calendar/search?q=" + encodeURIComponent("가상 색상 선택 확인"),
+  );
+  expect((await stored.json()).events[0].color).toBe("default");
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  await page.reload();
+  await expect(event).toHaveClass(/cal-color-blue/);
+  await orgColor.click();
+  await expect(
+    orgPalette.getByRole("radio", { name: "파랑", exact: true }),
+  ).toHaveAttribute("aria-checked", "true");
+  await reset.click();
   await expect(event).toHaveClass(/cal-color-default/);
+});
+
+test("단체를 여러 개 또는 전체 선택해 일정 한 건을 공유한다", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1600, height: 1100 });
+  await login(page, "staff-demo");
+  const today = dayOf(
+    (await (await page.request.get("/api/workspace")).json()).server_time,
+  );
+  const calendar = page.locator(".calendar-workspace");
+  const add = calendar.getByRole("button", {
+    name: "＋ 일정 추가",
+    exact: true,
+  });
+  const editor = page
+    .getByRole("dialog")
+    .filter({ has: page.getByLabel("일정 제목") });
+  const menu = calendarMenu(page);
+  const groups = menu.getByRole("group", { name: "단체 캘린더" });
+  const all = groups.getByRole("button", { name: "전체", exact: true });
+  const save = editor.getByRole("button", { name: "일정 추가", exact: true });
+  const council = groups.getByRole("button", {
+    name: "학과협의회",
+    exact: true,
+  });
+  const student = groups.getByRole("button", { name: "총학생회", exact: true });
+  const waitForSave = () =>
+    page.waitForResponse(
+      (response) =>
+        response.url().endsWith("/api/calendar/events") &&
+        response.request().method() === "POST",
+    );
+
+  await add.click();
+  await editor.getByLabel("일정 제목").fill("가상 공동 일정");
+  await calendarPicker(editor).click();
+  const orgCount = (await groups.getByRole("button").count()) - 1;
+  await all.click();
+  await expect(groups.locator('button[aria-pressed="true"]')).toHaveCount(
+    orgCount + 1,
+  );
+  await all.click();
+  await expect(save).toBeDisabled();
+  await council.click();
+  await student.click();
+  await expect(council).toHaveAttribute("aria-pressed", "true");
+  await expect(student).toHaveAttribute("aria-pressed", "true");
+  await expect(all).toHaveAttribute("aria-pressed", "false");
+  await student.press("Escape");
+  const saved = waitForSave();
+  await save.click();
+  const response = await saved;
+  expect(response.ok()).toBeTruthy();
+  const joint = await response.json();
+  expect(
+    joint.calendars.map((target: { org_id: string }) => target.org_id),
+  ).toEqual(["council", "student"]);
+  const chip = calendar.getByRole("button", {
+    name: `가상 공동 일정 일정 열기 · ${today}`,
+    exact: true,
+  });
+  await expect(chip).toHaveCount(1);
+  const councilEye = calendar.getByRole("button", {
+    name: "학과협의회 일정 표시",
+    exact: true,
+  });
+  const studentEye = calendar.getByRole("button", {
+    name: "총학생회 일정 표시",
+    exact: true,
+  });
+  await councilEye.click();
+  await expect(chip).toHaveCount(1);
+  await studentEye.click();
+  await expect(chip).toHaveCount(0);
+  await councilEye.click();
+  await expect(chip).toHaveCount(1);
+
+  await add.click();
+  await editor.getByLabel("일정 제목").fill("가상 전체 단체 일정");
+  await calendarPicker(editor).click();
+  await all.click();
+  await expect(calendarPicker(editor)).toContainText("전체");
+  await all.press("Escape");
+  const savedAll = waitForSave();
+  await save.click();
+  const allResponse = await savedAll;
+  expect(allResponse.ok()).toBeTruthy();
+  expect((await allResponse.json()).calendars).toHaveLength(orgCount);
 });
 
 test("시작 시간을 바꾸면 기본 30분 또는 직접 설정한 일정 길이를 유지해 종료 시간과 날짜를 옮긴다", async ({
@@ -525,8 +707,8 @@ test("날짜·시간 선택창과 종일 전환을 데스크톱·모바일에서
   await expect(end).toHaveValue("18:45");
   await openTimeSettings(editor);
   await editor.getByRole("checkbox", { name: "종일", exact: true }).check();
-  await expect(start).toBeDisabled();
-  await expect(end).toBeDisabled();
+  await expect(start).not.toBeVisible();
+  await expect(end).not.toBeVisible();
   await expect(editor.getByLabel("시간대", { exact: true })).toHaveCount(0);
   await pickDate(page, editor, "종료일", tomorrow);
   await editor.getByRole("button", { name: "시작일", exact: true }).click();
@@ -607,11 +789,13 @@ test("대시보드 캘린더에 종일·시간 일정을 저장하고 수정·�
     .click();
   const dialog = page.getByRole("dialog");
   await dialog.getByLabel("일정 제목").fill("가상 운영 회의");
-  await dialog.getByLabel("캘린더 · 공개 범위").selectOption("software");
+  await selectCalendar(dialog, "학과협의회");
   await openTimeSettings(dialog);
   await dialog.getByRole("checkbox", { name: "종일", exact: true }).check();
   await pickDate(page, dialog, "종료일", tomorrow);
-  await dialog.getByLabel("장소", { exact: true }).fill("가상 회의실");
+  const location = dialog.getByLabel("장소", { exact: true });
+  await expect(location).toBeVisible();
+  await location.fill("가상 회의실");
   await dialog.getByRole("button", { name: "일정 추가", exact: true }).click();
   await expect(dialog).not.toBeVisible();
   const grid = calendar.locator(".notion-month");
@@ -652,6 +836,7 @@ test("대시보드 캘린더에 종일·시간 일정을 저장하고 수정·�
       exact: true,
     })
     .click();
+  await expect(location).toHaveValue("가상 회의실");
   await dialog.getByLabel("일정 제목").fill("가상 운영 회의 변경");
   await openTimeSettings(dialog);
   await dialog.getByRole("checkbox", { name: "종일", exact: true }).uncheck();
@@ -665,13 +850,18 @@ test("대시보드 캘린더에 종일·시간 일정을 저장하고 수정·�
     exact: true,
   });
   await expect(event).toBeVisible();
-  await calendar
-    .getByRole("checkbox", { name: "학과협의회", exact: true })
-    .uncheck();
+  const eye = calendar.getByRole("button", {
+    name: "학과협의회 일정 표시",
+    exact: true,
+  });
+  await expect(eye).toHaveAttribute("aria-pressed", "true");
+  const openEye = await eye.locator("path").getAttribute("d");
+  await eye.click();
+  await expect(eye).toHaveAttribute("aria-pressed", "false");
+  expect(await eye.locator("path").getAttribute("d")).not.toBe(openEye);
   await expect(event).toHaveCount(0);
-  await calendar
-    .getByRole("checkbox", { name: "학과협의회", exact: true })
-    .check();
+  await eye.click();
+  await expect(eye).toHaveAttribute("aria-pressed", "true");
   await expect(event).toBeVisible();
   await mkdir("../../local-data/preview", { recursive: true });
   await expect(page.locator(".workspace-skip")).not.toBeFocused();
@@ -681,6 +871,7 @@ test("대시보드 캘린더에 종일·시간 일정을 저장하고 수정·�
     fullPage: true,
   });
   await event.click();
+  await dialog.getByLabel("일정 더보기").click();
   await dialog.getByRole("button", { name: "일정 삭제", exact: true }).click();
   await expect(
     dialog.getByText("이 일정을 삭제하시겠습니까?", { exact: true }),
@@ -689,6 +880,7 @@ test("대시보드 캘린더에 종일·시간 일정을 저장하고 수정·�
   await expect(
     dialog.getByRole("button", { name: "변경 저장", exact: true }),
   ).toBeEnabled();
+  await dialog.getByLabel("일정 더보기").click();
   await dialog.getByRole("button", { name: "일정 삭제", exact: true }).click();
   await dialog.getByRole("button", { name: "삭제하기", exact: true }).click();
   await expect(dialog).not.toBeVisible();
@@ -745,10 +937,25 @@ test("모바일에서 상위 조직 일정은 읽기 전용이며 내 반 일정
     .getByRole("button", { name: `${today} 일정 추가`, exact: true })
     .click();
   await dialog.getByLabel("일정 제목").fill("가상 반 야간 준비");
+  await calendarPicker(dialog).click();
+  const groups = calendarMenu(page).getByRole("group", { name: "단체 캘린더" });
+  await expect(groups.getByRole("button")).toHaveCount(2);
+  await expect(
+    groups.getByRole("button", { name: "학과협의회", exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await page.keyboard.press("Escape");
   await dialog.getByLabel("시작 시간", { exact: true }).fill("23:30");
   await pickDate(page, dialog, "종료일", tomorrow);
   await dialog.getByLabel("종료 시간", { exact: true }).fill("00:30");
+  const createdClass = page.waitForResponse(
+    (response) =>
+      response.url().endsWith("/api/calendar/events") &&
+      response.request().method() === "POST",
+  );
   await dialog.getByRole("button", { name: "일정 추가", exact: true }).click();
+  expect(await (await createdClass).json()).toMatchObject({
+    unit_id: "software-1-A",
+  });
   await expect(dialog).not.toBeVisible();
   await calendar
     .getByLabel("캘린더 보기", { exact: true })
@@ -805,7 +1012,7 @@ test("모바일에서 상위 조직 일정은 읽기 전용이며 내 반 일정
   });
 });
 
-test("노션형 패널의 반복·참여자·링크·검색·우클릭 복사와 명령어를 사용한다", async ({
+test("일정 항목을 줄에서 바로 입력하고 단체·링크 메뉴를 열어 편집한다", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1800, height: 1100 });
@@ -821,7 +1028,7 @@ test("노션형 패널의 반복·참여자·링크·검색·우클릭 복사와
     .slice(0, 10);
   const cal = page.locator(".calendar-workspace");
   await expect(
-    cal.getByRole("checkbox", { name: "학과협의회", exact: true }),
+    cal.getByRole("button", { name: "학과협의회 일정 표시", exact: true }),
   ).toBeVisible();
   await expect(cal.getByLabel("작은 달력", { exact: true })).toBeVisible();
   await page.keyboard.press("Control+k");
@@ -843,8 +1050,27 @@ test("노션형 패널의 반복·참여자·링크·검색·우클릭 복사와
     .getByRole("dialog")
     .filter({ has: page.getByLabel("일정 제목") });
   await editor.getByLabel("일정 제목").fill("가상 반복 운영회의");
+  await expect(
+    editor.getByRole("combobox", { name: "시작 시간" }),
+  ).toBeVisible();
+  await expect(calendarPicker(editor)).toBeVisible();
+  await expect(editor.getByLabel("정보 표시 여부")).toBeVisible();
+  const description = editor.getByLabel("설명", { exact: true });
+  await expect(description).toBeVisible();
+  await description.fill("가상 설명");
   await openTimeSettings(editor);
-  await editor.getByLabel("캘린더 · 공개 범위").selectOption("software");
+  await calendarPicker(editor).click();
+  const calendars = calendarMenu(page).getByRole("group", {
+    name: "단체 캘린더",
+  });
+  await expect(
+    calendars.getByRole("button", { name: "학과협의회", exact: true }),
+  ).toHaveCount(1);
+  await expect(
+    calendars.getByText("스마트소프트웨어학과", { exact: false }),
+  ).toHaveCount(0);
+  await selectOnlyCalendar(calendarMenu(page), "학과협의회");
+  await page.keyboard.press("Escape");
   await editor.getByRole("button", { name: "반복 설정", exact: true }).click();
   await page
     .getByRole("menuitem", { name: "사용자 지정…", exact: true })
@@ -855,22 +1081,46 @@ test("노션형 패널의 반복·참여자·링크·검색·우클릭 복사와
     .check();
   await pickDate(page, repeatDialog, "반복 종료일", until);
   await repeatDialog.getByRole("button", { name: "완료", exact: true }).click();
-  await editor
-    .locator("summary")
-    .filter({ hasText: /참여자/ })
-    .click();
-  await editor
+  const participants = editor.getByLabel("참여자 검색");
+  await participants.fill("부학회장");
+  await page
+    .getByRole("dialog", { name: "참여자 선택" })
     .getByRole("checkbox", { name: "가상 부학회장", exact: true })
     .check();
-  await editor.getByRole("button", { name: /링크 추가/ }).click();
-  await editor.getByLabel("링크 1 이름").fill("가상 회의 자료");
-  await editor.getByLabel("링크 1 주소").fill("https://example.com/meeting");
+  await editor.getByLabel("일정 제목").click();
+  await expect(participants).toHaveAttribute("placeholder", "참여자 · 1명");
+  const references = editor.getByRole("button", { name: /링크 및 첨부 자료/ });
+  const referencesMenu = page.getByRole("dialog", {
+    name: "링크 및 첨부 자료",
+  });
+  await references.click();
+  await referencesMenu.getByRole("button", { name: /링크 추가/ }).click();
+  await referencesMenu.getByLabel("링크 1 이름").fill("가상 회의 자료");
+  await referencesMenu.getByLabel("링크 1 주소").fill("잘못된 주소");
+  await references.click();
+  await expect(referencesMenu).toBeHidden();
+  const submit = editor.getByRole("button", { name: "일정 추가", exact: true });
+  await submit.click();
+  await expect(referencesMenu.getByLabel("링크 1 주소")).toBeVisible();
+  await expect(referencesMenu.getByLabel("링크 1 주소")).toBeFocused();
+  await referencesMenu
+    .getByLabel("링크 1 주소")
+    .fill("https://example.com/meeting");
+  await references.click();
+  await expect(references).toContainText("1개");
   await editor.getByLabel("상태", { exact: true }).selectOption("free");
   await editor.getByLabel("정보 표시 여부").selectOption("busy");
-  await editor.getByRole("button", { name: "일정 색상", exact: true }).click();
+  await calendarPicker(editor).click();
   await page.getByRole("radio", { name: "스톤", exact: true }).click();
-  await editor.getByRole("button", { name: /리마인더 추가/ }).click();
-  await editor.getByRole("button", { name: "일정 추가", exact: true }).click();
+  const reminder = editor.getByRole("button", { name: /^리마인더/ });
+  await reminder.click();
+  await page
+    .getByRole("dialog", { name: "리마인더" })
+    .getByRole("button", { name: /리마인더 추가/ })
+    .click();
+  await reminder.click();
+  await expect(reminder).toContainText("1개");
+  await submit.click();
   await expect(editor).not.toBeVisible();
   const original = cal
     .getByLabel("월간 일정", { exact: true })
@@ -889,12 +1139,15 @@ test("노션형 패널의 반복·참여자·링크·검색·우클릭 복사와
     }),
   ).toBeVisible();
   await original.click();
+  await expect(referencesMenu).toBeHidden();
+  await expect(description).toHaveValue("가상 설명");
   await openTimeSettings(editor);
   await expect(
     editor.getByRole("button", { name: "반복 설정", exact: true }),
   ).toContainText("1주마다");
+  await references.click();
   await expect(
-    editor.getByRole("link", { name: /가상 회의 자료/ }),
+    referencesMenu.getByRole("link", { name: /가상 회의 자료/ }),
   ).toHaveAttribute("href", "https://example.com/meeting");
   await cal.getByRole("button", { name: "캘린더 확대", exact: true }).click();
   await cal.screenshot({
@@ -938,7 +1191,9 @@ test("노션형 패널의 반복·참여자·링크·검색·우클릭 복사와
   await cal
     .getByRole("checkbox", { name: "주 번호 표시", exact: true })
     .check();
-  await expect(cal.locator(".cal-week-number")).toHaveCount(6);
+  await expect(
+    cal.locator(".notion-month-scroll .cal-week-number"),
+  ).toHaveCount(12);
   await cal.getByLabel("일수", { exact: true }).selectOption("3");
   await cal.getByLabel("캘린더 보기 설정", { exact: true }).click();
   await cal.getByRole("button", { name: "오늘", exact: true }).click();
@@ -964,6 +1219,300 @@ test("노션형 패널의 반복·참여자·링크·검색·우클릭 복사와
   await cal.getByRole("button", { name: "오늘", exact: true }).click();
   await cal.getByRole("button", { name: "캘린더 축소", exact: true }).click();
   expect(errors).toEqual([]);
+});
+
+test("월간 달력은 휠과 빈 칸 드래그로 주 단위로 이어진다", async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  await login(page, "staff-demo");
+  const calendar = page.locator(".calendar-workspace");
+  await calendar
+    .getByRole("button", { name: "캘린더 확대", exact: true })
+    .click();
+  await page.keyboard.press(".");
+  const jump = page.getByRole("dialog", {
+    name: "원하는 날짜로 이동",
+    exact: true,
+  });
+  await jump.getByLabel("이동할 날짜").fill("2026-12-01");
+  await jump.getByRole("button", { name: "이동", exact: true }).click();
+  const scroll = calendar.getByRole("region", { name: "월간 일정 스크롤" });
+  const heading = calendar.locator(".calendar-month-title h3");
+  const firstWeek = () =>
+    scroll.evaluate((element) => {
+      const top = element.getBoundingClientRect().top;
+      const row = Array.from(element.children).find(
+        (week) => week.getBoundingClientRect().bottom > top + 1,
+      );
+      return row?.querySelector("[data-date]")?.getAttribute("data-date");
+    });
+  const distanceToWeekLine = () =>
+    scroll.evaluate((element) => {
+      const top = element.getBoundingClientRect().top;
+      return Math.min(
+        ...Array.from(element.children, (week) =>
+          Math.abs(week.getBoundingClientRect().top - top),
+        ),
+      );
+    });
+  const rowHeight = await scroll
+    .locator(".notion-month-week")
+    .first()
+    .evaluate((row) => row.getBoundingClientRect().height);
+  await expect.poll(firstWeek).toBe("2026-11-29");
+  await expect(heading).toHaveText("2026년 12월");
+
+  const rect = (await scroll.boundingBox())!;
+  const partialWeek = Math.round(rowHeight * 0.75);
+  await page.mouse.move(rect.x + 20, rect.y + rowHeight - 10);
+  await page.mouse.wheel(0, partialWeek);
+  await expect.poll(firstWeek).toBe("2026-12-06");
+  await expect.poll(distanceToWeekLine).toBeLessThanOrEqual(1);
+  await expect(heading).toHaveText("2026년 12월");
+  await page.mouse.wheel(0, partialWeek);
+  await expect.poll(firstWeek).toBe("2026-12-13");
+  await expect.poll(distanceToWeekLine).toBeLessThanOrEqual(1);
+  await expect(heading).toHaveText("2027년 1월");
+  await expect(
+    calendar.getByRole("region", { name: "작은 달력", exact: true }),
+  ).toContainText("2027년 1월");
+
+  await calendar
+    .getByRole("button", { name: "＋ 일정 추가", exact: true })
+    .click();
+  const title = calendar.getByLabel("일정 제목");
+  await title.fill("스크롤 중 보존할 가상 초안");
+  let confirmations = 0;
+  page.on("dialog", async (dialog) => {
+    confirmations += 1;
+    await dialog.dismiss();
+  });
+  const saturday = (await scroll
+    .locator('[data-date="2026-12-19"]')
+    .boundingBox())!;
+  const x = saturday.x + saturday.width / 2;
+  const y = saturday.y + saturday.height - 12;
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.move(x, y + partialWeek, { steps: 7 });
+  await expect.poll(distanceToWeekLine).toBeGreaterThan(8);
+  await page.mouse.up();
+  await expect.poll(firstWeek).toBe("2026-12-20");
+  await expect.poll(distanceToWeekLine).toBeLessThanOrEqual(1);
+  await expect(heading).toHaveText("2027년 1월");
+  await expect(title).toHaveValue("스크롤 중 보존할 가상 초안");
+
+  const nextSaturday = (await scroll
+    .locator('[data-date="2026-12-26"]')
+    .boundingBox())!;
+  const nextY = nextSaturday.y + nextSaturday.height - 12;
+  await page.mouse.move(x, nextY);
+  await page.mouse.down();
+  await page.mouse.move(x, nextY - partialWeek, { steps: 7 });
+  await page.mouse.up();
+  await expect.poll(firstWeek).toBe("2026-12-13");
+  await expect.poll(distanceToWeekLine).toBeLessThanOrEqual(1);
+  await expect(title).toHaveValue("스크롤 중 보존할 가상 초안");
+  expect(confirmations).toBe(0);
+
+  await calendar.getByRole("button", { name: "오늘", exact: true }).click();
+  const today = dayOf(
+    (await (await page.request.get("/api/workspace")).json()).server_time,
+  );
+  const year = Number(today.slice(0, 4));
+  const month = Number(today.slice(5, 7));
+  await expect(heading).toHaveText(`${year}년 ${month}월`);
+});
+
+test("반복 회차 이동은 가운데 모달에서 단일·이후 범위를 선택하고 저장한다", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1600, height: 1100 });
+  await login(page, "staff-demo");
+  const { server_time } = await (
+    await page.request.get("/api/workspace")
+  ).json();
+  const firstDay = `${dayOf(server_time).slice(0, 7)}-10`;
+  const occurrenceDay = nextDay(firstDay);
+  const thirdDay = nextDay(occurrenceDay);
+  const dropDay = nextDay(thirdDay);
+  const title = "가상 반복 이동 일정";
+  const create = await page.request.post("/api/calendar/events", {
+    headers: { origin: new URL(page.url()).origin },
+    data: {
+      unit_id: "software",
+      title,
+      starts_at: `${firstDay}T13:30:00+09:00`,
+      ends_at: `${firstDay}T14:30:00+09:00`,
+      recurrence: { frequency: "daily", interval: 1, count: 4 },
+    },
+  });
+  expect(create.ok()).toBeTruthy();
+  const before = await create.json();
+  const updatePath = `/api/calendar/events/${before.id}/occurrence`;
+  let updates = 0;
+  page.on("request", (request) => {
+    if (request.url().endsWith(updatePath)) updates += 1;
+  });
+
+  await page.reload();
+  await page.getByRole("button", { name: "캘린더 확대", exact: true }).click();
+  const occurrence = page.getByRole("button", {
+    name: `${title} 일정 열기 · ${occurrenceDay}`,
+    exact: true,
+  });
+  const target = page.locator(`.calendar-day[data-date="${dropDay}"]`);
+  const pending = (day: string) =>
+    page.getByRole("button", {
+      name: `${title} 저장 전 변경 확인 · ${day}`,
+      exact: true,
+    });
+  const modal = page.getByRole("dialog", {
+    name: `반복 이벤트 “${title}” 이동`,
+  });
+  const cancel = modal.getByRole("button", {
+    name: "변경 사항 취소",
+    exact: true,
+  });
+  const single = modal.getByRole("radio", { name: "이 이벤트", exact: true });
+  const following = modal.getByRole("radio", {
+    name: "이 이벤트부터 이후 이벤트",
+  });
+  const dateLabel = (day: string) =>
+    new Intl.DateTimeFormat("ko-KR", {
+      month: "long",
+      day: "numeric",
+      weekday: "long",
+      timeZone: "Asia/Seoul",
+    }).format(new Date(`${day}T12:00:00+09:00`));
+
+  await occurrence.dragTo(target);
+  await expect(modal).toBeVisible();
+  await expect(modal).toContainText(title);
+  await expect(single).toBeChecked();
+  await expect(following).not.toBeChecked();
+  await expect(modal.locator("dd")).toHaveText([
+    `${dateLabel(dropDay)} · 13:30–14:30`,
+    `${dateLabel(occurrenceDay)} · 13:30–14:30`,
+  ]);
+  await expect(single).toBeFocused();
+  await expect(cancel).toHaveCSS("color", "rgb(152, 44, 35)");
+  const saveSingle = modal.getByRole("button", {
+    name: "이벤트 1개 저장하기",
+    exact: true,
+  });
+  expect((await cancel.boundingBox())!.x).toBeLessThan(
+    (await saveSingle.boundingBox())!.x,
+  );
+  expect(updates).toBe(0);
+  await page.keyboard.press("Escape");
+  await expect(modal).toBeHidden();
+  await expect(occurrence).toBeVisible();
+  expect(updates).toBe(0);
+
+  await occurrence.dragTo(target);
+  await expect(modal).toBeVisible();
+  await modal.getByRole("button", { name: "계속 편집" }).click();
+  await expect(modal).toBeHidden();
+  await pending(dropDay).click();
+  await cancel.click();
+  await expect(modal).toBeHidden();
+  await expect(pending(dropDay)).toHaveCount(0);
+  await expect(occurrence).toBeVisible();
+  expect(updates).toBe(0);
+
+  await occurrence.dragTo(target);
+  await expect(modal).toBeVisible();
+  await following.check();
+  await modal.getByRole("button", { name: "계속 편집" }).click();
+  await expect(modal).toBeHidden();
+  await expect(pending(dropDay).locator(".cal-pending-dot")).toBeVisible();
+  await expect(pending(dropDay)).toBeFocused();
+  await expect(occurrence).toHaveCount(0);
+  expect(updates).toBe(0);
+
+  const nextDropDay = nextDay(dropDay);
+  await pending(dropDay).dragTo(
+    page.locator(`.calendar-day[data-date="${nextDropDay}"]`),
+  );
+  await expect(pending(nextDropDay).locator(".cal-pending-dot")).toBeVisible();
+  await expect(modal).toBeHidden();
+  await pending(nextDropDay).dragTo(target);
+  await pending(dropDay).click();
+  await expect(modal).toBeVisible();
+  await expect(following).toBeChecked();
+  await expect(modal.locator("dd").first()).toContainText(dateLabel(dropDay));
+  expect(updates).toBe(0);
+  await single.check();
+  await page.setViewportSize({ width: 320, height: 730 });
+  const box = (await modal.boundingBox())!;
+  expect(Math.abs(box.x + box.width / 2 - 160)).toBeLessThan(2);
+  expect(Math.abs(box.y + box.height / 2 - 365)).toBeLessThan(2);
+  expect(box.width).toBeLessThan(320);
+  const updated = page.waitForResponse((r) => r.url().endsWith(updatePath));
+  await saveSingle.click();
+  const firstUpdate = await updated;
+  expect(firstUpdate.ok()).toBeTruthy();
+  expect(firstUpdate.request().postDataJSON()).toMatchObject({
+    scope: "single",
+  });
+  await expect(modal).toBeHidden();
+  await expect(page.locator("[data-pending-move]")).toHaveCount(0);
+  expect(updates).toBe(1);
+
+  const current = await (
+    await page.request.get(`/api/calendar/events/${before.id}`)
+  ).json();
+  expect(dayOf(current.starts_at)).toBe(firstDay);
+  expect(current.revision).toBe(before.revision + 1);
+  expect(current.recurrence).toEqual(before.recurrence);
+  await page.setViewportSize({ width: 1600, height: 1100 });
+  await expect(
+    page.getByRole("button", {
+      name: `${title} 일정 열기 · ${dropDay}`,
+      exact: true,
+    }),
+  ).toHaveCount(2);
+  await expect(occurrence).toHaveCount(0);
+  const third = page.getByRole("button", {
+    name: `${title} 일정 열기 · ${thirdDay}`,
+    exact: true,
+  });
+  const followingDay = nextDay(nextDay(dropDay));
+  await third.dragTo(
+    page.locator(`.calendar-day[data-date="${followingDay}"]`),
+  );
+  await following.check();
+  const savedFollowing = page.waitForResponse((r) =>
+    r.url().endsWith(updatePath),
+  );
+  await modal.getByRole("button", { name: "이후 이벤트 저장하기" }).click();
+  const secondUpdate = await savedFollowing;
+  expect(secondUpdate.ok()).toBeTruthy();
+  expect(secondUpdate.request().postDataJSON()).toMatchObject({
+    scope: "following",
+  });
+  await expect(third).toHaveCount(0);
+  await expect(
+    page.getByRole("button", {
+      name: `${title} 일정 열기 · ${dropDay}`,
+      exact: true,
+    }),
+  ).toHaveCount(1);
+  await expect(
+    page.getByRole("button", {
+      name: `${title} 일정 열기 · ${followingDay}`,
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", {
+      name: `${title} 일정 열기 · ${nextDay(followingDay)}`,
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("일정을 이동했습니다.", { exact: true }),
+  ).toHaveCount(0);
 });
 
 test("시간축 드래그로 일정 이동·종료 변경·범위 선택을 수행하고 리마인더를 확인한다", async ({

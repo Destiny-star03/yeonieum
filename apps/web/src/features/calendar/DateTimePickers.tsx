@@ -45,19 +45,31 @@ export function PickerPopover({
       if (!anchor.current || !ref.current) return;
       const a = anchor.current.getBoundingClientRect();
       const p = ref.current.getBoundingClientRect();
+      const roomOnLeft = a.left - p.width >= 14;
+      const roomOnRight = innerWidth - a.right - p.width >= 14;
       const top =
-        a.bottom + 6 + p.height <= innerHeight - 8
-          ? a.bottom + 6
-          : a.top - p.height - 6;
+        roomOnLeft || roomOnRight
+          ? a.top
+          : a.bottom + 6 + p.height <= innerHeight - 8
+            ? a.bottom + 6
+            : a.top - p.height - 6;
       setPosition({
-        left: Math.max(8, Math.min(a.left, innerWidth - p.width - 8)),
+        left: roomOnLeft
+          ? a.left - p.width - 6
+          : roomOnRight
+            ? a.right + 6
+            : Math.max(8, Math.min(a.left, innerWidth - p.width - 8)),
         top: Math.max(8, Math.min(top, innerHeight - p.height - 8)),
       });
     }
     place();
+    const observer = new ResizeObserver(place);
+    if (anchor.current) observer.observe(anchor.current);
+    if (ref.current) observer.observe(ref.current);
     window.addEventListener("resize", place);
     window.addEventListener("scroll", place, true);
     return () => {
+      observer.disconnect();
       window.removeEventListener("resize", place);
       window.removeEventListener("scroll", place, true);
     };

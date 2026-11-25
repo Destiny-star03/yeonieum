@@ -1,3 +1,5 @@
+import json
+
 from yeonieum.modules.access.policy import active_roles, descendants, scope, unit
 
 
@@ -16,13 +18,18 @@ def visible_units(conn, actor, now):
     return result
 
 
+def event_unit_ids(event):
+    return (event["unit_id"], *json.loads(event["details"] or "{}").get("additional_unit_ids", []))
+
+
 def can_manage(conn, actor, event, now):
-    if event["unit_id"] not in scope(conn, actor, now):
+    targets = set(event_unit_ids(event))
+    if not targets <= scope(conn, actor, now):
         return False
     if actor["is_admin"] or actor["id"] == event["created_by"]:
         return True
-    return any(
-        r["role"] in {"head", "chair", "department_head"}
-        and event["unit_id"] in descendants(conn, r["unit_id"])
-        for r in active_roles(conn, actor, now)
-    )
+    managed = set()
+    for role in active_roles(conn, actor, now):
+        if role["role"] in {"head", "chair", "department_head"}:
+            managed.update(descendants(conn, role["unit_id"]))
+    return targets <= managed

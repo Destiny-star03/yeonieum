@@ -7,8 +7,22 @@ import {
 } from "react";
 import { api } from "../../shared/api";
 import "./budgets.css";
+import BudgetBalance from "./BudgetBalance";
 import ExpenseDialog from "./ExpenseDialog";
+import {
+  ExpenseHistory,
+  ExpenseReviewActions,
+  ExpenseSummary,
+  type Correction,
+} from "./ExpenseReview";
 import OrganizationCards, { useOrganizationOrder } from "./OrganizationCards";
+import ReceiptPreview from "./ReceiptPreview";
+import {
+  reviewStatuses,
+  type Resolution,
+  type ResolutionHistory,
+  type ReviewStatus,
+} from "./resolution";
 
 type Person = { id: string; name: string };
 type Money = {
@@ -28,7 +42,9 @@ type Expense = {
   amount: number;
   executor_id: string;
   executor_name: string;
-  review_state: string;
+  review_state: ReviewStatus;
+  resolution: Resolution | null;
+  history: ResolutionHistory[];
   exception_state: string;
   executor_was_head: number;
   exception_requires_teacher: boolean;
@@ -73,7 +89,12 @@ type Options = {
     active: number;
   }[];
 };
-type Evidence = { id: string; filename: string; size: number };
+type Evidence = {
+  id: string;
+  filename: string;
+  size: number;
+  previewable: boolean;
+};
 const won = (n: number) => `${n.toLocaleString("ko-KR")}원`;
 const labels: Record<string, string> = {
   view: "회계 내역 열람",
@@ -82,6 +103,20 @@ const labels: Record<string, string> = {
   review: "개별 지출 검토",
   evidence: "민감 증빙 열람·등록",
 };
+
+function writeExpenseSelection(org: string, year: number, id: string) {
+  const url = new URL(window.location.href);
+  for (const [key, value] of [
+    ["budgetOrg", org],
+    ["budgetYear", String(year)],
+    ["expense", id],
+  ]) {
+    if (id) url.searchParams.set(key, value);
+    else url.searchParams.delete(key);
+  }
+  if (url.href !== window.location.href)
+    window.history.replaceState(window.history.state, "", url);
+}
 
 export default function BudgetWorkspace({
   user,
@@ -93,17 +128,34 @@ export default function BudgetWorkspace({
     people: {},
     grants: [],
   });
-  const [org, setOrg] = useState("");
+  const [initialSelection] = useState(() => {
+    const params = new URLSearchParams(window.location.search);
+    const org = params.get("budgetOrg") || "";
+    const year = Number(params.get("budgetYear"));
+    return org && Number.isInteger(year) && year >= 2000 && year <= 2200
+      ? { org, year, id: params.get("expense") || "" }
+      : { org: "", year: new Date().getFullYear(), id: "" };
+  });
+  const [org, setOrg] = useState(initialSelection.org);
   const organizationOrder = useOrganizationOrder(user.id);
-  const [year, setYear] = useState(new Date().getFullYear());
+  const [year, setYear] = useState(initialSelection.year);
   const [detail, setDetail] = useState<BudgetDetail | null>(null);
-  const [selected, setSelected] = useState("");
-  const [editingEvent, setEditingEvent] = useState("");
+  const [selected, setSelected] = useState(initialSelection.id);
+  const [statusFilter, setStatusFilter] = useState<ReviewStatus | "all">("all");
+  const [search, setSearch] = useState("");
+  const [resolutionError, setResolutionError] = useState("");
   const [settlement, setSettlement] = useState<{
     created_at: string;
     snapshot: BudgetDetail;
   } | null>(null);
-  const [evidence, setEvidence] = useState<Evidence[]>([]);
+  const [evidence, setEvidence] = useState<{
+    expenseId: string;
+    items: Evidence[];
+    error?: string;
+  } | null>(null);
+  const [evidenceRetry, setEvidenceRetry] = useState(0);
+  const [previewEvidence, setPreviewEvidence] = useState("");
+  const [evidenceActionError, setEvidenceActionError] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
@@ -125,7 +177,8 @@ export default function BudgetWorkspace({
     people: Person[];
   } | null>(null);
   const latestRequest = useRef(0);
-  const expenseRequest = useRef<string | null>(null);
+  const expenseDetail = useRef<HTMLDivElement>(null);
+  const focusExpense = useRef(false);
 
   const refresh = useCallback(async () => {
     const requestId = ++latestRequest.current;
@@ -139,8 +192,13 @@ export default function BudgetWorkspace({
     const chosen = next.organizations.some((item) => item.id === org)
       ? org
       : next.organizations[0]?.id || "";
-    if (chosen !== org) setOrg(chosen);
-    setDetail(null);
+    if (chosen !== org) {
+      setOrg(chosen);
+      setDetail(null);
+      setSelected("");
+      writeExpenseSelection(chosen, year, "");
+      return;
+    }
     if (chosen) {
       const result = await api<BudgetDetail>(`/budgets/${chosen}/${year}`);
       if (requestId === latestRequest.current) setDetail(result);
@@ -161,7 +219,64 @@ export default function BudgetWorkspace({
     };
   }, [refresh]);
 
-  async function perform(action: () => Promise<unknown>, success: string) {
+  const current = detail?.expenses.find((item) => item.id === selected);
+  const selectedExpenseId = current?.id;
+  const evidenceCount = current?.evidence_count;
+  const canReadEvidence = Boolean(detail?.capabilities.evidence);
+  const currentEvidence =
+    evidence?.expenseId === selectedExpenseId ? evidence : null;
+  useEffect(() => {
+    if (!selectedExpenseId || !canReadEvidence) return;
+    let active = true;
+    setEvidence(null);
+    api<Evidence[]>(`/budgets/expenses/${selectedExpenseId}/evidence`)
+      .then((items) => {
+        if (active) setEvidence({ expenseId: selectedExpenseId, items });
+      })
+      .catch((e: Error) => {
+        if (active)
+          setEvidence({
+            expenseId: selectedExpenseId,
+            items: [],
+            error: e.message,
+          });
+      });
+    return () => {
+      active = false;
+    };
+  }, [selectedExpenseId, canReadEvidence, evidenceCount, evidenceRetry]);
+  useEffect(() => {
+    if (!expenseDraft && selectedExpenseId && focusExpense.current) {
+      focusExpense.current = false;
+      expenseDetail.current?.focus();
+    }
+  }, [expenseDraft, selectedExpenseId]);
+
+  function selectExpense(id: string) {
+    setSelected(id);
+    setEvidence(null);
+    setPreviewEvidence("");
+    setEvidenceActionError("");
+    setResolutionError("");
+    writeExpenseSelection(org, year, id);
+  }
+
+  function changeBudget(nextOrg: string, nextYear: number) {
+    if (busy || (nextOrg === org && nextYear === year)) return;
+    setOrg(nextOrg);
+    setYear(nextYear);
+    selectExpense("");
+    setSettlement(null);
+    setDetail(null);
+    setStatusFilter("all");
+    setSearch("");
+  }
+
+  async function perform(
+    action: () => Promise<unknown>,
+    success: string,
+    onFailure = setError,
+  ) {
     setBusy(true);
     setError("");
     setNotice("");
@@ -171,7 +286,7 @@ export default function BudgetWorkspace({
       setNotice(success);
       return true;
     } catch (e) {
-      setError((e as Error).message);
+      onFailure((e as Error).message);
       return false;
     } finally {
       setBusy(false);
@@ -194,86 +309,43 @@ export default function BudgetWorkspace({
       "연간 예산을 저장했습니다.",
     );
   }
-  async function submitEvent(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    const form = e.currentTarget;
-    const v = values(e);
+  async function submitCorrection(row: Expense, correction: Correction) {
+    setResolutionError("");
     const saved = await perform(
-      () =>
-        api("/budgets/events", {
-          org_id: org,
-          year,
-          name: v.name,
-          allocation: Number(v.allocation),
-        }),
-      "행사 배정을 저장했습니다.",
-    );
-    if (saved) form.reset();
-  }
-  async function updateEvent(
-    e: FormEvent<HTMLFormElement>,
-    event: BudgetDetail["events"][number],
-  ) {
-    e.preventDefault();
-    const v = values(e);
-    const saved = await perform(
-      () =>
-        api("/budgets/events", {
-          org_id: org,
-          year,
-          event_id: event.id,
-          expected_revision: event.revision,
-          name: v.name,
-          allocation: Number(v.allocation),
-        }),
-      "행사 배정 변경을 기록했습니다.",
-    );
-    if (saved) setEditingEvent("");
-  }
-  async function submitExpense(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    const form = e.currentTarget;
-    const v = values(e);
-    const requestId = expenseRequest.current || crypto.randomUUID();
-    expenseRequest.current = requestId;
-    const saved = await perform(
-      () =>
-        api("/budgets/expenses", {
-          request_id: requestId,
-          org_id: org,
-          year,
-          event_id: v.event_id || null,
-          spent_on: v.spent_on,
-          purpose: v.purpose,
-          amount: Number(v.amount),
-          executor_id: v.executor_id,
-        }),
-      "실제 지출을 기록했습니다. 증빙을 첨부해 주세요.",
-    );
-    if (saved) {
-      expenseRequest.current = null;
-      form.reset();
-    }
-  }
-  async function submitCorrection(e: FormEvent<HTMLFormElement>, row: Expense) {
-    e.preventDefault();
-    const v = values(e);
-    await perform(
       () =>
         api(`/budgets/expenses/${row.id}/correct`, {
-          amount: Number(v.amount),
-          purpose: v.purpose,
-          reason: v.reason,
+          ...correction,
           expected_revision: row.revision,
         }),
-      "정정 이력을 남겼습니다. 검토가 다시 필요합니다.",
+      correction.resubmit
+        ? "보완한 결의서를 다시 제출했습니다."
+        : "정정 이력을 남겼습니다. 검토가 다시 필요합니다.",
+      setResolutionError,
     );
+    if (saved) {
+      setStatusFilter("all");
+      setSearch("");
+    }
+    return saved;
   }
-  async function decision(
-    row: Expense,
-    kind: "review" | "exception",
-    answer: string,
-  ) {
+  async function reviewExpense(row: Expense, decision: string, reason: string) {
+    setResolutionError("");
+    const saved = await perform(
+      () =>
+        api(`/budgets/expenses/${row.id}/review`, {
+          decision,
+          reason,
+          expected_revision: row.revision,
+        }),
+      decision === "approved"
+        ? "결의서를 승인했습니다."
+        : "결의서를 반려했습니다.",
+      setResolutionError,
+    );
+    if (saved) setStatusFilter("all");
+    return saved;
+  }
+  async function handleException(row: Expense, answer: string) {
     const reason = window.prompt(
       answer === "approved"
         ? "확인 사유를 입력해 주세요."
@@ -282,7 +354,7 @@ export default function BudgetWorkspace({
     if (!reason || reason.trim().length < 2) return;
     await perform(
       () =>
-        api(`/budgets/expenses/${row.id}/${kind}`, {
+        api(`/budgets/expenses/${row.id}/exception`, {
           decision: answer,
           reason,
           expected_revision: row.revision,
@@ -291,35 +363,33 @@ export default function BudgetWorkspace({
     );
   }
   async function uploadEvidence(row: Expense, file: File) {
-    await perform(async () => {
-      const response = await fetch(
-        `/api/budgets/expenses/${row.id}/evidence?filename=${encodeURIComponent(file.name)}`,
-        {
-          method: "PUT",
-          credentials: "same-origin",
-          headers: { "Content-Type": "application/octet-stream" },
-          body: file,
-        },
-      );
-      if (!response.ok) {
-        const body = await response.json();
-        throw new Error(body.detail || "증빙 등록에 실패했습니다.");
-      }
-    }, "증빙을 안전하게 등록했습니다.");
-  }
-  async function showEvidence(row: Expense) {
-    setError("");
-    setSelected(row.id);
-    try {
-      setEvidence(
-        await api<Evidence[]>(`/budgets/expenses/${row.id}/evidence`),
-      );
-    } catch (e) {
-      setEvidence([]);
-      setError((e as Error).message);
-    }
+    setEvidenceActionError("");
+    await perform(
+      async () => {
+        const response = await fetch(
+          `/api/budgets/expenses/${row.id}/evidence?filename=${encodeURIComponent(file.name)}`,
+          {
+            method: "PUT",
+            credentials: "same-origin",
+            headers: { "Content-Type": "application/octet-stream" },
+            body: file,
+          },
+        );
+        if (!response.ok) {
+          const body = await response.json().catch(() => null);
+          throw new Error(
+            typeof body?.detail === "string"
+              ? body.detail
+              : "증빙 등록에 실패했습니다.",
+          );
+        }
+      },
+      "증빙을 안전하게 등록했습니다.",
+      setEvidenceActionError,
+    );
   }
   async function download(item: Evidence) {
+    setEvidenceActionError("");
     try {
       const response = await fetch(
         `/api/budgets/evidence/${item.id}/download`,
@@ -333,34 +403,73 @@ export default function BudgetWorkspace({
       link.click();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (e) {
-      setError((e as Error).message);
+      setEvidenceActionError((e as Error).message);
     }
   }
   const people = [...(options.people[org] || [])];
   if (user.is_admin && !people.some((p) => p.id === user.id))
     people.push({ id: user.id, name: user.name });
-  const current = detail?.expenses.find((e) => e.id === selected);
   const settled = Boolean(detail?.budget?.settled_at);
+  const orgName = options.organizations.find((item) => item.id === org)?.name;
+  const canRecord = Boolean(
+    detail?.budget && detail.capabilities.record && !settled,
+  );
+  const expenses = detail?.expenses ?? [];
+  const filters = [
+    { id: "all" as const, label: "전체", count: expenses.length },
+    ...(Object.keys(reviewStatuses) as ReviewStatus[]).map((id) => ({
+      id,
+      label: reviewStatuses[id],
+      count: expenses.filter((row) => row.review_state === id).length,
+    })),
+  ];
+  const query = search.trim().toLocaleLowerCase("ko-KR");
+  const visibleExpenses = expenses.filter(
+    (row) =>
+      (statusFilter === "all" || row.review_state === statusFilter) &&
+      [
+        row.resolution?.title,
+        row.purpose,
+        row.executor_name,
+        row.resolution?.payee,
+      ].some((value) => value?.toLocaleLowerCase("ko-KR").includes(query)),
+  );
   return (
     <div className="finance-page">
       <section className="panel finance-overview-panel">
-        <h2>단체별 연간 예산</h2>
-        <p className="muted">
-          실제 집행액은 검토·반려와 무관하게 한 번만 합산합니다. 회계 업무
-          권한은 별도 지정합니다.
-        </p>
+        <div className="finance-overview-heading">
+          <div>
+            <h2>예산 현황</h2>
+            {orgName && (
+              <p>
+                {year}년 · {orgName}
+              </p>
+            )}
+          </div>
+          {detail && canRecord && (
+            <button
+              type="button"
+              className="primary"
+              disabled={busy}
+              onClick={() =>
+                setExpenseDraft({
+                  org,
+                  year,
+                  detail,
+                  people: options.people[org] || [],
+                })
+              }
+            >
+              ＋ 지출결의서 작성
+            </button>
+          )}
+        </div>
         <div className="finance-controls">
           <label>
             단체{" "}
             <select
               value={org}
-              onChange={(e) => {
-                setOrg(e.target.value);
-                setSelected("");
-                setSettlement(null);
-                setDetail(null);
-                expenseRequest.current = null;
-              }}
+              onChange={(e) => changeBudget(e.target.value, year)}
             >
               <option value="">선택</option>
               {organizationOrder.arrange(options.organizations).map((o) => (
@@ -377,41 +486,10 @@ export default function BudgetWorkspace({
               min="2000"
               max="2200"
               value={year}
-              onChange={(e) => {
-                setYear(Number(e.target.value));
-                setSelected("");
-                setSettlement(null);
-                setDetail(null);
-                expenseRequest.current = null;
-              }}
+              onChange={(e) => changeBudget(org, Number(e.target.value))}
             />
           </label>
         </div>
-        {overview.length > 0 && (
-          <OrganizationCards
-            items={organizationOrder.arrange(
-              overview.map((item) => ({
-                id: item.org_id,
-                name: item.name,
-                configured: item.configured,
-                budget: item.totals.budget,
-                remaining: item.totals.remaining,
-                actual: item.totals.actual,
-                count: item.expense_count,
-                settled: item.settled,
-              })),
-            )}
-            selected={org}
-            onSelect={(id) => {
-              setOrg(id);
-              setDetail(null);
-              setSelected("");
-              setSettlement(null);
-            }}
-            onMove={organizationOrder.move}
-            message={organizationOrder.message}
-          />
-        )}
         {error && (
           <p className="error" role="alert">
             {error}
@@ -422,420 +500,350 @@ export default function BudgetWorkspace({
             {notice}
           </p>
         )}
-        {detail?.totals && (
-          <div className="finance-metrics">
-            {Object.entries(detail.totals).map(([key, value]) => (
-              <div key={key}>
-                <small>
-                  {
-                    {
-                      budget: "연간 예산",
-                      actual: "실제 집행",
-                      remaining: "잔액",
-                      excess: "초과액",
-                      pending: "검토 대기",
-                      approved: "확인 완료",
-                      rejected: "반려",
-                    }[key as keyof Money]
-                  }
-                </small>
-                <strong>{won(value)}</strong>
-              </div>
-            ))}
-          </div>
+        {detail?.budget && detail.totals && (
+          <BudgetBalance
+            key={`balance-${org}-${year}`}
+            totals={detail.totals}
+            expenses={detail.expenses}
+          />
         )}
-        {detail?.totals && (
-          <div className="finance-usage">
-            <div>
-              <strong>예산 사용률</strong>
-              <span>
-                {detail.totals.budget > 0
-                  ? `${Math.round((detail.totals.actual / detail.totals.budget) * 100)}%`
-                  : detail.totals.actual
-                    ? "예산 초과"
-                    : "0%"}
-              </span>
-            </div>
-            <progress
-              aria-label="연간 예산 사용률"
-              max={Math.max(detail.totals.budget, detail.totals.actual, 1)}
-              value={detail.totals.actual}
-            />
-            <p>
-              사용 {won(detail.totals.actual)} · 남은 예산{" "}
-              {won(detail.totals.remaining)}
-              {detail.totals.excess > 0
-                ? ` · 초과 ${won(detail.totals.excess)}`
-                : ""}
-            </p>
-          </div>
+        {detail && !detail.budget && (
+          <p className="finance-unconfigured">
+            이 단체의 연간 예산이 아직 설정되지 않았습니다.
+          </p>
         )}
         {settled && (
           <p className="success">정산 확정 · {detail?.budget?.settled_at}</p>
         )}
         {detail?.capabilities.plan && !settled && (
-          <form onSubmit={submitAnnual} className="finance-inline">
-            <label>
-              연간 예산 (원){" "}
-              <input
-                name="amount"
-                type="number"
-                min="0"
-                required
-                defaultValue={detail.budget?.amount ?? 0}
-                key={`${org}-${year}-${detail.budget?.revision}`}
-              />
-            </label>
-            {Boolean(user.is_admin) && (
-              <label className="finance-check">
+          <details
+            className="finance-budget-settings"
+            key={`settings-${org}-${year}`}
+            open={!detail.budget}
+          >
+            <summary>
+              {detail.budget ? "연간 예산 수정" : "연간 예산 설정"}
+            </summary>
+            <form onSubmit={submitAnnual} className="finance-inline">
+              <label>
+                연간 예산 (원){" "}
                 <input
-                  type="checkbox"
-                  checked={authorizeHeads}
-                  onChange={(e) => setAuthorizeHeads(e.target.checked)}
+                  name="amount"
+                  type="number"
+                  min="0"
+                  required
+                  defaultValue={detail.budget?.amount ?? 0}
+                  key={`${org}-${year}-${detail.budget?.revision}`}
                 />
-                현재 단체 책임자에게 지출·증빙 등록 권한 함께 부여
               </label>
-            )}
-            <button disabled={busy}>저장</button>
-          </form>
+              {Boolean(user.is_admin) && (
+                <label className="finance-check">
+                  <input
+                    type="checkbox"
+                    checked={authorizeHeads}
+                    onChange={(e) => setAuthorizeHeads(e.target.checked)}
+                  />
+                  현재 단체 책임자에게 지출·증빙 등록 권한 함께 부여
+                </label>
+              )}
+              <button disabled={busy}>저장</button>
+            </form>
+          </details>
+        )}
+        {overview.length > 1 && (
+          <section
+            className="finance-organization-overview"
+            aria-label="단체별 예산 비교"
+          >
+            <h3>단체별 예산</h3>
+            <OrganizationCards
+              items={organizationOrder.arrange(
+                overview.map((item) => ({
+                  id: item.org_id,
+                  name: item.name,
+                  configured: item.configured,
+                  budget: item.totals.budget,
+                  remaining: item.totals.remaining,
+                  actual: item.totals.actual,
+                  count: item.expense_count,
+                  settled: item.settled,
+                })),
+              )}
+              selected={org}
+              onSelect={(id) => changeBudget(id, year)}
+              onMove={organizationOrder.move}
+              message={organizationOrder.message}
+            />
+          </section>
         )}
       </section>
-      {Boolean(user.is_admin) && org && (
-        <section className="panel finance-grant-panel">
-          <details>
-            <summary>회계 업무 권한 관리</summary>
-            <h2>단체별 회계 업무 권한</h2>
-            <p className="muted">
-              직책이나 일반 자료 권한으로 자동 부여되지 않습니다. 증빙 권한은
-              별도로 지정합니다.
-            </p>
-            <div className="finance-grants">
-              {people.map((person) => (
-                <div key={person.id}>
-                  <strong>{person.name}</strong>
-                  {Object.entries(labels).map(([capability, label]) => {
-                    const enabled = options.grants.some(
-                      (g) =>
-                        g.user_id === person.id &&
-                        g.org_id === org &&
-                        g.capability === capability &&
-                        g.active,
-                    );
-                    const builtInPlan = Boolean(
-                      user.is_admin &&
-                      person.id === user.id &&
-                      capability === "plan",
-                    );
-                    return (
-                      <label key={capability}>
-                        <input
-                          type="checkbox"
-                          checked={enabled || builtInPlan}
-                          disabled={busy || builtInPlan}
-                          onChange={(e) =>
-                            perform(
-                              () =>
-                                api("/budgets/grants", {
-                                  user_id: person.id,
-                                  org_id: org,
-                                  capability,
-                                  enabled: e.target.checked,
-                                }),
-                              "회계 업무 권한을 변경했습니다.",
-                            )
-                          }
-                        />
-                        {label}
-                      </label>
-                    );
-                  })}
-                </div>
-              ))}
-            </div>
-          </details>
-        </section>
-      )}
       {detail?.budget && (
         <>
-          <section className="panel">
-            <h2>행사 배정</h2>
-            <div className="finance-list">
-              {detail.events.map((event) => (
-                <div key={event.id}>
-                  <strong>{event.name}</strong>
-                  <span>
-                    배정 {won(event.allocation)} · 집행{" "}
-                    {won(event.totals.actual)} · 잔액{" "}
-                    {won(event.totals.remaining)}
-                  </span>
-                  {detail.capabilities.plan && !settled && (
+          <section className="panel finance-ledger">
+            <h2>지출결의서</h2>
+            {expenses.length > 0 && (
+              <div className="finance-ledger-tools">
+                <div
+                  className="finance-ledger-filters"
+                  role="group"
+                  aria-label="결의서 상태"
+                >
+                  {filters.map(({ id, label, count }) => (
                     <button
-                      onClick={() =>
-                        setEditingEvent(
-                          editingEvent === event.id ? "" : event.id,
-                        )
-                      }
+                      key={id}
+                      type="button"
+                      aria-pressed={statusFilter === id}
+                      onClick={() => setStatusFilter(id)}
                     >
-                      배정 수정
+                      {label} <span>{count}</span>
                     </button>
-                  )}
-                  {editingEvent === event.id && (
-                    <form
-                      className="finance-inline"
-                      onSubmit={(e) => updateEvent(e, event)}
-                    >
-                      <label>
-                        행사명{" "}
-                        <input name="name" defaultValue={event.name} required />
-                      </label>
-                      <label>
-                        배정액{" "}
-                        <input
-                          name="allocation"
-                          type="number"
-                          min="0"
-                          defaultValue={event.allocation}
-                          required
-                        />
-                      </label>
-                      <button disabled={busy}>변경 저장</button>
-                    </form>
-                  )}
+                  ))}
                 </div>
-              ))}
-            </div>
-            {detail.capabilities.plan && !settled && (
-              <form onSubmit={submitEvent} className="finance-inline">
-                <label>
-                  행사명 <input name="name" maxLength={120} required />
-                </label>
-                <label>
-                  배정액{" "}
-                  <input name="allocation" type="number" min="0" required />
-                </label>
-                <button disabled={busy}>행사 등록</button>
-              </form>
+                <input
+                  type="search"
+                  aria-label="결의서 검색"
+                  placeholder="제목, 집행자, 거래처 검색"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                />
+              </div>
             )}
-          </section>
-          {detail.capabilities.record && !settled && (
-            <section className="panel">
-              <h2>실제 지출 기록</h2>
-              <p className="muted">
-                영수증·엑셀·지출결의서를 첨부하고 금액을 확인하세요. 저장하면
-                사용액과 잔액에 반영합니다.
+            {visibleExpenses.length === 0 && (
+              <p className="finance-resolution-empty" role="status">
+                {expenses.length
+                  ? "조건에 맞는 결의서가 없습니다."
+                  : "제출한 지출결의서가 없습니다."}
               </p>
-              <button
-                className="primary"
-                disabled={busy}
-                onClick={() =>
-                  setExpenseDraft({
-                    org,
-                    year,
-                    detail,
-                    people: options.people[org] || [],
-                  })
-                }
-              >
-                ＋ 지출·증빙 등록
-              </button>
-              <details className="finance-legacy-entry">
-                <summary>증빙 없이 지출 먼저 기록</summary>
-                <form onSubmit={submitExpense} className="finance-form">
-                  <label>
-                    집행일 <input name="spent_on" type="date" required />
-                  </label>
-                  <label>
-                    실제 집행자{" "}
-                    <select name="executor_id" required>
-                      <option value="">선택</option>
-                      {(options.people[org] || []).map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label>
-                    행사{" "}
-                    <select name="event_id">
-                      <option value="">연간 일반 지출</option>
-                      {detail.events.map((event) => (
-                        <option key={event.id} value={event.id}>
-                          {event.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label>
-                    금액 (원){" "}
-                    <input name="amount" type="number" min="1" required />
-                  </label>
-                  <label className="wide">
-                    용도 <input name="purpose" maxLength={300} required />
-                  </label>
-                  <button disabled={busy}>지출 기록</button>
-                </form>
-              </details>
-            </section>
-          )}
-          <section className="panel">
-            <h2>지출과 검토</h2>
-            {detail.expenses.length === 0 && (
-              <p className="muted">기록된 지출이 없습니다.</p>
             )}
             <div className="finance-list">
-              {detail.expenses.map((row) => (
-                <div key={row.id}>
+              {visibleExpenses.map((row) => (
+                <div
+                  key={row.id}
+                  className={row.id === selected ? "is-selected" : undefined}
+                >
                   <button
                     className="finance-row"
-                    onClick={() => {
-                      setSelected(row.id === selected ? "" : row.id);
-                      setEvidence([]);
-                    }}
+                    aria-expanded={row.id === selected}
+                    aria-controls={
+                      row.id === selected ? "finance-expense-detail" : undefined
+                    }
+                    onClick={() =>
+                      selectExpense(row.id === selected ? "" : row.id)
+                    }
                   >
-                    <strong>{row.purpose}</strong>
-                    <span>
-                      {row.spent_on} · {row.executor_name} 집행 ·{" "}
-                      {won(row.amount)} ·{" "}
-                      {row.review_state === "pending"
-                        ? "검토 대기"
-                        : row.review_state === "approved"
-                          ? "확인"
-                          : "반려"}
-                      {row.exception_state !== "none" &&
-                        ` · 초과 ${row.exception_state === "pending" ? "확인 대기" : row.exception_state === "approved" ? "확인" : "반려"}`}{" "}
-                      · 증빙 {row.evidence_count}건
+                    <span className="finance-row-heading">
+                      <strong>{row.resolution?.title || row.purpose}</strong>
+                      <b>{won(row.amount)}</b>
+                    </span>
+                    <span className="finance-row-meta">
+                      {row.spent_on} · {row.executor_name} 집행
+                    </span>
+                    <span className="finance-row-status">
+                      <span data-review={row.review_state}>
+                        {reviewStatuses[row.review_state]}
+                      </span>
+                      {row.exception_state !== "none" && (
+                        <span>{`초과 ${row.exception_state === "pending" ? "확인 대기" : row.exception_state === "approved" ? "확인" : "반려"}`}</span>
+                      )}
+                      <span>
+                        {row.evidence_count > 0
+                          ? `증빙 ${row.evidence_count}개`
+                          : "첨부 없음"}
+                      </span>
                     </span>
                     <small className="finance-balance-change">
                       {won(row.balance_before)} − {won(row.amount)} = 잔액{" "}
                       {won(row.balance_after)}
                     </small>
                   </button>
+                  {current && current.id === row.id && (
+                    <div
+                      className="finance-detail"
+                      id="finance-expense-detail"
+                      ref={expenseDetail}
+                      tabIndex={-1}
+                    >
+                      <ExpenseSummary
+                        expense={current}
+                        amount={won(current.amount)}
+                        historicalEvent={
+                          detail.events.find(
+                            (event) => event.id === current.event_id,
+                          )?.name
+                        }
+                      />
+                      {current.exception_state === "pending" &&
+                        !settled &&
+                        ((current.exception_requires_teacher &&
+                          detail.is_admin) ||
+                          (!current.exception_requires_teacher &&
+                            detail.is_head &&
+                            user.id !== current.executor_id)) && (
+                          <div className="finance-actions">
+                            <button
+                              disabled={busy}
+                              onClick={() =>
+                                handleException(current, "approved")
+                              }
+                            >
+                              초과분 확인
+                            </button>
+                            <button
+                              disabled={busy}
+                              onClick={() =>
+                                handleException(current, "rejected")
+                              }
+                            >
+                              초과분 반려
+                            </button>
+                          </div>
+                        )}
+                      {current.changes.length > 0 && (
+                        <details>
+                          <summary>
+                            정정 이력 {current.changes.length}건
+                          </summary>
+                          {current.changes.map((change) => (
+                            <p key={change.id}>
+                              {change.reason}:{" "}
+                              {JSON.parse(
+                                change.before_json,
+                              ).amount.toLocaleString()}
+                              원 →{" "}
+                              {JSON.parse(
+                                change.after_json,
+                              ).amount.toLocaleString()}
+                              원
+                            </p>
+                          ))}
+                        </details>
+                      )}
+                      {canReadEvidence && (
+                        <section
+                          className="finance-evidence"
+                          aria-labelledby="finance-evidence-title"
+                        >
+                          <h4 id="finance-evidence-title">첨부 증빙</h4>
+                          {evidenceActionError && (
+                            <p
+                              role="alert"
+                              className="error finance-receipt-error"
+                            >
+                              {evidenceActionError}
+                            </p>
+                          )}
+                          {!currentEvidence ? (
+                            <p className="finance-input-note" role="status">
+                              첨부 증빙을 불러오는 중…
+                            </p>
+                          ) : currentEvidence.error ? (
+                            <div className="finance-evidence-actions">
+                              <p
+                                role="alert"
+                                className="error finance-receipt-error"
+                              >
+                                {currentEvidence.error}
+                              </p>
+                              <button
+                                onClick={() =>
+                                  setEvidenceRetry((count) => count + 1)
+                                }
+                              >
+                                첨부 증빙 다시 불러오기
+                              </button>
+                            </div>
+                          ) : currentEvidence.items.length === 0 ? (
+                            <p className="finance-input-note">첨부 없음</p>
+                          ) : (
+                            <ul className="finance-evidence-list">
+                              {currentEvidence.items.map((item) => (
+                                <li key={item.id}>
+                                  <div className="finance-evidence-actions">
+                                    <strong>{item.filename}</strong>
+                                    {item.previewable && (
+                                      <button
+                                        type="button"
+                                        aria-expanded={
+                                          previewEvidence === item.id
+                                        }
+                                        aria-label={`${item.filename} ${previewEvidence === item.id ? "미리보기 닫기" : "미리보기"}`}
+                                        onClick={() =>
+                                          setPreviewEvidence(
+                                            previewEvidence === item.id
+                                              ? ""
+                                              : item.id,
+                                          )
+                                        }
+                                      >
+                                        {previewEvidence === item.id
+                                          ? "미리보기 닫기"
+                                          : "미리보기"}
+                                      </button>
+                                    )}
+                                    <button
+                                      type="button"
+                                      aria-label={`${item.filename} 내려받기`}
+                                      onClick={() => download(item)}
+                                    >
+                                      내려받기
+                                    </button>
+                                  </div>
+                                  {previewEvidence === item.id && (
+                                    <ReceiptPreview
+                                      filename={item.filename}
+                                      evidenceId={item.id}
+                                    />
+                                  )}
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                          {!settled && (
+                            <label>
+                              증빙 추가 (50 MiB 이내){" "}
+                              <input
+                                type="file"
+                                accept=".pdf,.png,.jpg,.jpeg,.txt,.csv,.docx,.xlsx,.pptx,.hwp,.hwpx"
+                                disabled={busy}
+                                onChange={(e) => {
+                                  const file = e.target.files?.[0];
+                                  if (file) {
+                                    void uploadEvidence(current, file);
+                                    e.target.value = "";
+                                  }
+                                }}
+                              />
+                            </label>
+                          )}
+                        </section>
+                      )}
+                      {!settled &&
+                        (detail.capabilities.review ||
+                          detail.capabilities.record) && (
+                          <ExpenseReviewActions
+                            key={current.id}
+                            expense={current}
+                            busy={busy}
+                            canReview={Boolean(
+                              detail.capabilities.review &&
+                              current.review_state === "pending",
+                            )}
+                            canCorrect={Boolean(detail.capabilities.record)}
+                            error={resolutionError}
+                            onReview={(decision, reason) =>
+                              reviewExpense(current, decision, reason)
+                            }
+                            onCorrect={(correction) =>
+                              submitCorrection(current, correction)
+                            }
+                          />
+                        )}
+                      <ExpenseHistory history={current.history} />
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
-            {current && (
-              <div className="finance-detail">
-                <h3>{current.purpose}</h3>
-                <p className="muted">
-                  등록자와 실제 집행자는 구분됩니다. 반려해도 실제 지출액과
-                  잔액은 유지됩니다.
-                </p>
-                {detail.capabilities.review &&
-                  current.review_state === "pending" &&
-                  !settled && (
-                    <div className="finance-actions">
-                      <button
-                        disabled={busy}
-                        onClick={() => decision(current, "review", "approved")}
-                      >
-                        개별 확인
-                      </button>
-                      <button
-                        disabled={busy}
-                        onClick={() => decision(current, "review", "rejected")}
-                      >
-                        반려
-                      </button>
-                    </div>
-                  )}
-                {current.exception_state === "pending" &&
-                  !settled &&
-                  ((current.exception_requires_teacher && detail.is_admin) ||
-                    (!current.exception_requires_teacher &&
-                      detail.is_head &&
-                      user.id !== current.executor_id)) && (
-                    <div className="finance-actions">
-                      <button
-                        disabled={busy}
-                        onClick={() =>
-                          decision(current, "exception", "approved")
-                        }
-                      >
-                        초과분 확인
-                      </button>
-                      <button
-                        disabled={busy}
-                        onClick={() =>
-                          decision(current, "exception", "rejected")
-                        }
-                      >
-                        초과분 반려
-                      </button>
-                    </div>
-                  )}
-                {detail.capabilities.record && !settled && (
-                  <form
-                    onSubmit={(e) => submitCorrection(e, current)}
-                    className="finance-inline"
-                  >
-                    <label>
-                      현재 반영 금액{" "}
-                      <input
-                        name="amount"
-                        type="number"
-                        min="0"
-                        defaultValue={current.amount}
-                        required
-                        key={current.revision}
-                      />
-                    </label>
-                    <label>
-                      용도{" "}
-                      <input
-                        name="purpose"
-                        defaultValue={current.purpose}
-                        required
-                      />
-                    </label>
-                    <label>
-                      정정 사유 <input name="reason" minLength={2} required />
-                    </label>
-                    <button disabled={busy}>정정 기록</button>
-                  </form>
-                )}
-                {current.changes.length > 0 && (
-                  <details>
-                    <summary>정정 이력 {current.changes.length}건</summary>
-                    {current.changes.map((change) => (
-                      <p key={change.id}>
-                        {change.reason}:{" "}
-                        {JSON.parse(change.before_json).amount.toLocaleString()}
-                        원 →{" "}
-                        {JSON.parse(change.after_json).amount.toLocaleString()}
-                        원
-                      </p>
-                    ))}
-                  </details>
-                )}
-                {detail.capabilities.evidence && (
-                  <div className="finance-evidence">
-                    <button onClick={() => showEvidence(current)}>
-                      증빙 목록 보기
-                    </button>
-                    {!settled && (
-                      <label>
-                        증빙 추가 (50 MiB 이내){" "}
-                        <input
-                          type="file"
-                          accept=".pdf,.png,.jpg,.jpeg,.txt,.csv,.docx,.xlsx,.pptx,.hwp,.hwpx"
-                          disabled={busy}
-                          onChange={(e) => {
-                            const file = e.target.files?.[0];
-                            if (file) uploadEvidence(current, file);
-                          }}
-                        />
-                      </label>
-                    )}
-                    {evidence.map((item) => (
-                      <button key={item.id} onClick={() => download(item)}>
-                        {item.filename} 내려받기
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
           </section>
           {detail.is_admin && !settled && (
             <section className="panel">
@@ -906,6 +914,61 @@ export default function BudgetWorkspace({
           )}
         </>
       )}
+      {Boolean(user.is_admin) && org && (
+        <section className="panel finance-grant-panel">
+          <details>
+            <summary>회계 업무 권한 관리</summary>
+            <h2>단체별 회계 업무 권한</h2>
+            <p className="muted">
+              직책이나 일반 자료 권한으로 자동 부여되지 않습니다. 증빙 권한은
+              별도로 지정합니다.
+            </p>
+            <div className="finance-grants">
+              {people.map((person) => (
+                <div key={person.id}>
+                  <strong>{person.name}</strong>
+                  {Object.entries(labels).map(([capability, label]) => {
+                    const enabled = options.grants.some(
+                      (g) =>
+                        g.user_id === person.id &&
+                        g.org_id === org &&
+                        g.capability === capability &&
+                        g.active,
+                    );
+                    const builtInPlan = Boolean(
+                      user.is_admin &&
+                      person.id === user.id &&
+                      capability === "plan",
+                    );
+                    return (
+                      <label key={capability}>
+                        <input
+                          type="checkbox"
+                          checked={enabled || builtInPlan}
+                          disabled={busy || builtInPlan}
+                          onChange={(e) =>
+                            perform(
+                              () =>
+                                api("/budgets/grants", {
+                                  user_id: person.id,
+                                  org_id: org,
+                                  capability,
+                                  enabled: e.target.checked,
+                                }),
+                              "회계 업무 권한을 변경했습니다.",
+                            )
+                          }
+                        />
+                        {label}
+                      </label>
+                    );
+                  })}
+                </div>
+              ))}
+            </div>
+          </details>
+        </section>
+      )}
       {expenseDraft && (
         <ExpenseDialog
           org={expenseDraft.org}
@@ -916,18 +979,20 @@ export default function BudgetWorkspace({
           }
           userId={user.id}
           people={expenseDraft.people}
-          events={expenseDraft.detail.events}
+          remaining={expenseDraft.detail.totals?.remaining ?? 0}
           canEvidence={Boolean(expenseDraft.detail.capabilities.evidence)}
           onClose={() => setExpenseDraft(null)}
-          onRecorded={refresh}
           onSaved={async (id, hasEvidence) => {
+            writeExpenseSelection(expenseDraft.org, expenseDraft.year, id);
             await refresh();
-            setSelected(id);
-            setEvidence([]);
+            focusExpense.current = true;
+            setStatusFilter("all");
+            setSearch("");
+            selectExpense(id);
             setNotice(
               hasEvidence
-                ? "지출과 증빙을 저장했습니다. 사용액과 잔액에 반영했습니다."
-                : "실제 지출을 기록했습니다. 사용액과 잔액에 반영했으며 증빙은 나중에 추가할 수 있습니다.",
+                ? "결의서와 증빙을 제출했습니다. 지출액을 잔액에 반영했습니다."
+                : "결의서를 제출했습니다. 지출액을 잔액에 반영했고 증빙은 상세에서 추가할 수 있습니다.",
             );
           }}
         />

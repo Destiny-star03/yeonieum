@@ -1,4 +1,5 @@
 import WorkspaceShell from "../workspace/WorkspaceShell";
+import type { NotificationTarget } from "../notifications/NotificationBell";
 import AcademicGroups from "./AcademicGroups";
 import DocumentLibrary from "../documents/DocumentLibrary";
 import BudgetWorkspace from "../budgets/BudgetWorkspace";
@@ -72,6 +73,7 @@ const labels: Record<string, string> = {
   "finance.expense-reviewed": "개별 지출 검토",
   "finance.exception-reviewed": "초과분 처리",
   "finance.evidence-added": "민감 증빙 등록",
+  "finance.evidence-preview-authorized": "민감 증빙 미리보기 허용",
   "finance.evidence-download-authorized": "민감 증빙 다운로드 허용",
   "finance.settled": "전체 정산 확정",
   "handover.created": "인수인계 생성",
@@ -86,10 +88,17 @@ export default function Portal() {
   const [loading, setLoading] = useState(true),
     [error, setError] = useState(""),
     [notice, setNotice] = useState("");
-  const [tab, setTab] = useState("overview"),
+  const [tab, setTab] = useState(() =>
+      new URLSearchParams(window.location.search).has("expense")
+        ? "budgets"
+        : "overview",
+    ),
     [search, setSearch] = useState(""),
     [role, setRole] = useState("");
   const [showAllPeople, setShowAllPeople] = useState(false);
+  const [notification, setNotification] = useState<NotificationTarget | null>(
+    null,
+  );
   const [assignmentOrgId, setAssignmentOrgId] = useState("");
   const [scopeId, setScopeId] = useState("");
   const [grantOrgId, setGrantOrgId] = useState("");
@@ -103,6 +112,18 @@ export default function Portal() {
     message: string;
     error: boolean;
   } | null>(null);
+  function navigate(next: string) {
+    setNotification(null);
+    if (next !== "budgets") {
+      const url = new URL(window.location.href);
+      if (url.searchParams.has("expense")) {
+        for (const key of ["budgetOrg", "budgetYear", "expense"])
+          url.searchParams.delete(key);
+        window.history.replaceState(window.history.state, "", url);
+      }
+    }
+    setTab(next);
+  }
   const registration = useRef<HTMLDialogElement>(null),
     revocation = useRef<HTMLDialogElement>(null);
   useEffect(() => {
@@ -204,7 +225,7 @@ export default function Portal() {
       setHistory([]);
       setError("");
       setNotice("");
-      setTab("overview");
+      navigate("overview");
       setSearch("");
       setShowAllPeople(false);
       setAssignmentOrgId("");
@@ -214,7 +235,7 @@ export default function Portal() {
     }
   }
   async function activity() {
-    setTab("activity");
+    navigate("activity");
     setError("");
     try {
       setHistory(await api<Audit[]>("/audit"));
@@ -477,58 +498,58 @@ export default function Portal() {
       user={user}
       tab={tab}
       canAudit={canAudit}
-      onNavigate={setTab}
+      onNavigate={navigate}
       onActivity={() => void activity()}
       onLogout={() => void logout()}
+      onOpenNotification={(target) => {
+        navigate(target.kind === "document" ? "documents" : "overview");
+        setNotification(target);
+      }}
     >
       <main className="content">
-        <div className="page-heading">
-          <div>
-            <p className="eyebrow">
-              {tab === "overview"
-                ? "YOUR CONNECTED WORKSPACE"
-                : tab === "roles"
-                  ? "PEOPLE & RESPONSIBILITIES"
-                  : tab === "documents"
-                    ? "RECORDS & CONTINUITY"
+        {tab !== "documents" && (
+          <div className="page-heading">
+            <div>
+              <p className="eyebrow">
+                {tab === "overview"
+                  ? "YOUR CONNECTED WORKSPACE"
+                  : tab === "roles"
+                    ? "PEOPLE & RESPONSIBILITIES"
                     : tab === "budgets"
                       ? "BUDGET & SETTLEMENT"
                       : tab === "handovers"
                         ? "HANDOVER & CONTINUITY"
                         : "ACTIVITY LOG"}
-            </p>
-            <h1>
-              {tab === "overview"
-                ? "대시보드"
-                : tab === "roles"
-                  ? "조직과 담당자 관리"
-                  : tab === "documents"
-                    ? "자료실"
+              </p>
+              <h1>
+                {tab === "overview"
+                  ? "대시보드"
+                  : tab === "roles"
+                    ? "조직과 담당자 관리"
                     : tab === "budgets"
                       ? "예산과 정산"
                       : tab === "handovers"
                         ? "인수인계"
                         : "업무의 흐름을 기록합니다"}
-            </h1>
-            <p className="muted">
-              {tab === "overview"
-                ? `${user.name}님, 오늘의 일정을 살펴보고 필요한 업무를 시작하세요.`
-                : tab === "roles"
-                  ? "직책과 담당 범위, 임기를 함께 확인하고 권한을 부여합니다."
-                  : tab === "documents"
-                    ? "활동의 기록을 보관하고 다음 담당자에게 이어줍니다."
+              </h1>
+              <p className="muted">
+                {tab === "overview"
+                  ? `${user.name}님, 오늘의 일정을 살펴보고 필요한 업무를 시작하세요.`
+                  : tab === "roles"
+                    ? "직책과 담당 범위, 임기를 함께 확인하고 권한을 부여합니다."
                     : tab === "budgets"
                       ? "단체별 연간 예산과 실제 지출·검토·정산을 확인합니다."
                       : tab === "handovers"
                         ? "자료와 업무를 다음 담당자에게 전달하고 인수 확인을 남깁니다."
                         : "역할 변경의 주체와 시각을 확인하세요."}
-            </p>
+              </p>
+            </div>
+            <div className="date-label">
+              {date(workspace.server_time)}
+              <small>현재 서버 시각 기준</small>
+            </div>
           </div>
-          <div className="date-label">
-            {date(workspace.server_time)}
-            <small>현재 서버 시각 기준</small>
-          </div>
-        </div>
+        )}
         {error && (
           <div role="alert" className="error banner">
             {error}
@@ -543,12 +564,22 @@ export default function Portal() {
           <DocumentLibrary
             time={workspace.server_time}
             isAdmin={Boolean(user.is_admin)}
+            notification={
+              notification?.kind === "document" ? notification : null
+            }
           />
         )}
         {tab === "budgets" && <BudgetWorkspace user={user} />}
         {tab === "handovers" && <HandoverWorkspace user={user} />}
         {tab === "overview" && (
-          <Dashboard workspace={workspace} onNavigate={setTab} />
+          <Dashboard
+            workspace={workspace}
+            userId={user.id}
+            onNavigate={setTab}
+            notification={
+              notification?.kind === "calendar" ? notification : null
+            }
+          />
         )}
         {tab === "roles" && (
           <>

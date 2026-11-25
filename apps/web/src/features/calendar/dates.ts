@@ -29,10 +29,22 @@ export const shiftDay = (day: string, offset: number) =>
   new Date(Date.parse(`${day}T12:00:00Z`) + offset * dayMs)
     .toISOString()
     .slice(0, 10);
-export function monthDays(anchor: string) {
+export const monthVisibleWeeks = 6;
+export const monthBufferWeeks = 3;
+export function monthWeekStart(anchor: string) {
   const first = `${anchor.slice(0, 7)}-01`;
-  const start = shiftDay(first, -new Date(`${first}T12:00:00Z`).getUTCDay());
-  return Array.from({ length: 42 }, (_, i) => shiftDay(start, i));
+  return shiftDay(first, -new Date(`${first}T12:00Z`).getUTCDay());
+}
+export function daysForWeeks(first: string, weeks: number, weekends = true) {
+  return Array.from({ length: weeks * 7 }, (_, index) =>
+    shiftDay(first, index),
+  ).filter((_, index) => weekends || (index % 7 !== 0 && index % 7 !== 6));
+}
+export function weekOffset(first: string, next: string) {
+  return Math.round((Date.parse(next) - Date.parse(first)) / (7 * dayMs));
+}
+export function monthDays(anchor: string) {
+  return daysForWeeks(monthWeekStart(anchor), monthVisibleWeeks);
 }
 export function weekDays(anchor: string) {
   const start = shiftDay(anchor, -new Date(`${anchor}T12:00:00Z`).getUTCDay());

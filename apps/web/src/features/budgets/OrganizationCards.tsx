@@ -90,8 +90,7 @@ export default function OrganizationCards({
   return (
     <>
       <p className="finance-order-hint" id="finance-order-help">
-        카드를 드래그해 순서를 바꾸세요. 손잡이에 초점을 두고 방향키로도 옮길 수
-        있습니다.
+        카드 순서는 드래그하거나 손잡이에서 방향키로 바꿀 수 있습니다.
       </p>
       <div className="finance-org-grid" aria-label="단체별 예산 현황">
         {items.map((item, index) => (

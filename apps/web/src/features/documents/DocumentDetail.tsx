@@ -17,7 +17,10 @@ export default function DocumentDetail({
   options,
   busy,
   onClose,
+  onPreview,
   onVersion,
+  moveDestinations,
+  onMove,
   onChanged,
   perform,
 }: {
@@ -26,12 +29,17 @@ export default function DocumentDetail({
   options: LibraryOptions;
   busy: boolean;
   onClose: () => void;
+  onPreview: () => void;
   onVersion: () => void;
+  moveDestinations: { id: string; label: string }[];
+  onMove: (folderId: string) => void;
   onChanged: () => Promise<void>;
   perform: (fn: () => Promise<void>, message: string) => Promise<void>;
 }) {
   const [editing, setEditing] = useState(false),
     [metadata, setMetadata] = useState(metadataOf(row));
+  const [moving, setMoving] = useState(false);
+  const [destination, setDestination] = useState("");
   const [confirmation, setConfirmation] = useState<
     null | "trash" | "restore" | number
   >(null);
@@ -67,6 +75,11 @@ export default function DocumentDetail({
         <h2 id="document-detail-title">{row.title}</h2>
         <button onClick={onClose}>상세 닫기</button>
       </div>
+      {!row.deleted_at && (
+        <button type="button" disabled={busy} onClick={onPreview}>
+          미리보기
+        </button>
+      )}
       <p className="muted">
         {row.org_name} / {row.unit_name} · {row.academic_year}학년도 ·{" "}
         {row.category}
@@ -104,7 +117,7 @@ export default function DocumentDetail({
             새 버전 등록
           </button>
           <button
-            disabled={busy}
+            disabled={busy || moving}
             onClick={() => {
               setMetadata(metadataOf(row));
               setEditing(!editing);
@@ -112,8 +125,17 @@ export default function DocumentDetail({
           >
             분류·공유 수정
           </button>
+          {moveDestinations.length > 0 && (
+            <button
+              disabled={busy || editing || confirmation !== null}
+              aria-expanded={moving}
+              onClick={() => setMoving(!moving)}
+            >
+              폴더로 이동
+            </button>
+          )}
           <button
-            disabled={busy}
+            disabled={busy || moving}
             className="text-button"
             onClick={() => setConfirmation("trash")}
           >
@@ -125,6 +147,37 @@ export default function DocumentDetail({
         <button disabled={busy} onClick={() => setConfirmation("restore")}>
           자료 복원
         </button>
+      )}
+      {moving && moveDestinations.length > 0 && (
+        <form
+          className="library-edit"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (destination) onMove(destination);
+          }}
+        >
+          <label>
+            이동할 위치
+            <select
+              value={destination}
+              onChange={(event) => setDestination(event.target.value)}
+              disabled={busy}
+              required
+            >
+              <option value="" disabled>
+                위치를 선택하세요
+              </option>
+              {moveDestinations.map(({ id, label }) => (
+                <option key={id} value={id}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button className="primary" disabled={busy || !destination}>
+            이동
+          </button>
+        </form>
       )}
       {editing && !row.deleted_at && (
         <form

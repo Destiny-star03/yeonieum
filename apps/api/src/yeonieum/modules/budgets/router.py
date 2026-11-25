@@ -1,15 +1,21 @@
 """Local finance workflow. Amounts are whole KRW; recorded spending is never erased by review."""
 
-import hashlib
 import json
+from collections.abc import Callable
 from datetime import date
+from typing import Annotated, Literal
 from uuid import uuid4
 
 from fastapi import Depends, HTTPException, Query, Request
-from pydantic import BaseModel, Field
-from starlette.responses import FileResponse
+from pydantic import BaseModel, Field, StringConstraints, ValidationError
+from python_multipart.multipart import parse_options_header
+from starlette.datastructures import UploadFile
+from starlette.formparsers import MultiPartException, MultiPartParser
+from starlette.requests import ClientDisconnect
 
 from yeonieum.core.database import audit, stamp, transaction
+from yeonieum.core.postgres import PostgresConnection
+from yeonieum.modules.budgets import evidence as receipt_storage
 from yeonieum.modules.budgets.policy import (
     CAPABILITIES,
     can_view,
@@ -19,8 +25,7 @@ from yeonieum.modules.budgets.policy import (
     org_roles,
 )
 from yeonieum.modules.budgets.spending_preview import MAX_PREVIEW_SIZE, preview_spending
-from yeonieum.modules.documents.schemas import MAX_FILE_SIZE
-from yeonieum.modules.documents.storage import FileStore, checksum, valid_filename, validate_content
+from yeonieum.modules.documents.storage import FileStore, valid_filename
 
 
 class Grant(BaseModel):
@@ -47,27 +52,118 @@ class Event(BaseModel):
     expected_revision: int | None = None
 
 
+class Resolution(BaseModel):
+    title: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120)]
+    payee: Annotated[str, StringConstraints(strip_whitespace=True, max_length=120)] = ""
+    payment_method: Literal["", "card", "transfer", "cash", "other"] = ""
+
+
 class Expense(BaseModel):
     request_id: str = Field(min_length=16, max_length=80)
     org_id: str
     year: int = Field(ge=2000, le=2200)
     event_id: str | None = None
     spent_on: date
-    purpose: str = Field(min_length=1, max_length=300)
+    purpose: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=300)]
     amount: int = Field(gt=0, le=10**15)
     executor_id: str
+    resolution: Resolution | None = None
+
+
+MULTIPART_CHUNK_SIZE = 64 * 1024
+MAX_EXPENSE_SUBMISSION_SIZE = receipt_storage.MAX_EVIDENCE_SIZE + 1024 * 1024
+
+
+def receipt_error(status, message):
+    return HTTPException(status, {"field": "receipt", "message": message})
+
+
+async def bounded_expense_stream(request: Request):
+    length_header = request.headers.get("content-length")
+    declared = None
+    if length_header is not None:
+        try:
+            if not length_header.isascii() or not length_header.isdecimal():
+                raise ValueError
+            declared = int(length_header)
+        except ValueError:
+            raise receipt_error(400, "증빙 전송 크기가 올바르지 않습니다.") from None
+        if declared > MAX_EXPENSE_SUBMISSION_SIZE:
+            raise receipt_error(413, "파일은 50 MiB 이하로 등록해 주세요.")
+
+    received = 0
+    async for chunk in request.stream():
+        received += len(chunk)
+        if received > MAX_EXPENSE_SUBMISSION_SIZE:
+            raise receipt_error(413, "파일은 50 MiB 이하로 등록해 주세요.")
+        if declared is not None and received > declared:
+            raise receipt_error(400, "증빙 전송 크기가 올바르지 않습니다.")
+        for offset in range(0, len(chunk), MULTIPART_CHUNK_SIZE):
+            yield chunk[offset : offset + MULTIPART_CHUNK_SIZE]
+    if declared is not None and received != declared:
+        raise receipt_error(400, "증빙 전송이 완료되지 않았습니다.")
+
+
+class ExpenseSubmissionParser(MultiPartParser):
+    """Authorize the expense before accepting the receipt part."""
+
+    def __init__(self, request: Request, authorize: Callable[[Expense], None]):
+        super().__init__(
+            request.headers,
+            bounded_expense_stream(request),
+            max_files=1,
+            max_fields=1,
+            max_part_size=MULTIPART_CHUNK_SIZE,
+        )
+        self.authorize = authorize
+        self.expense: Expense | None = None
+        self.complete = False
+
+    def on_headers_finished(self):
+        disposition, options = parse_options_header(self._current_part.content_disposition)
+        name, is_file = options.get(b"name"), b"filename" in options
+        if disposition != b"form-data":
+            raise MultiPartException("Invalid form-data disposition.")
+        if self.expense is None:
+            if name == b"receipt":
+                raise receipt_error(422, "지출 정보를 증빙 파일보다 먼저 보내 주세요.")
+            if name != b"expense" or is_file:
+                raise HTTPException(422, "지출 정보를 JSON 텍스트로 보내 주세요.")
+        elif name != b"receipt" or not is_file or len(self.items) != 1:
+            raise receipt_error(422, "증빙 파일은 한 개만 보내 주세요.")
+        super().on_headers_finished()
+
+    def on_part_end(self):
+        super().on_part_end()
+        if self.expense is None:
+            try:
+                data = Expense.model_validate_json(self._current_part.data)
+            except ValidationError:
+                raise HTTPException(422, "지출 입력 내용을 확인해 주세요.") from None
+            self.authorize(data)
+            self.expense = data
+
+    def on_end(self):
+        self.complete = True
+
+
+async def receipt_chunks(receipt: UploadFile):
+    while chunk := await receipt.read(MULTIPART_CHUNK_SIZE):
+        yield chunk
 
 
 class Correction(BaseModel):
     amount: int = Field(ge=0, le=10**15)
-    purpose: str = Field(min_length=1, max_length=300)
-    reason: str = Field(min_length=2, max_length=500)
+    purpose: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=300)]
+    reason: Annotated[str, StringConstraints(strip_whitespace=True, min_length=2, max_length=500)]
     expected_revision: int = Field(ge=1)
+    resolution: Resolution | None = None
+    resubmit: bool = False
 
 
 class Decision(BaseModel):
     decision: str
-    reason: str = Field(min_length=2, max_length=500)
+    reason: Annotated[str, StringConstraints(strip_whitespace=True, min_length=2, max_length=500)]
     expected_revision: int = Field(ge=1)
 
 
@@ -105,7 +201,29 @@ def install_budget_routes(app, db, actor, now, storage_root):
         require(conn, user, row["org_id"], capability)
         if writable:
             annual(conn, row["org_id"], row["year"], True)
-        return dict(row)
+        return expense_record(row)
+
+    def expense_record(row):
+        record = dict(row)
+        record.pop("posting_order", None)
+        return record
+
+    def resolution_details(conn, ident):
+        row = conn.execute(
+            "SELECT title,payee,payment_method FROM expense_resolutions WHERE expense_id=?", (ident,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def save_resolution(conn, ident, resolution):
+        conn.execute(
+            """INSERT INTO expense_resolutions(expense_id,title,payee,payment_method) VALUES (?,?,?,?)
+               ON CONFLICT(expense_id) DO UPDATE SET title=excluded.title,payee=excluded.payee,
+               payment_method=excluded.payment_method""",
+            (ident, resolution.title, resolution.payee, resolution.payment_method),
+        )
+
+    def posting_order(conn):
+        return "posting_order" if isinstance(conn, PostgresConnection) else "rowid"
 
     def check_revision(row, expected):
         if row["revision"] != expected:
@@ -121,7 +239,7 @@ def install_budget_routes(app, db, actor, now, storage_root):
         }
         running, per_event = 0, {}
         for row in conn.execute(
-            "SELECT id,event_id,amount,exception_required,exception_state FROM expenses WHERE org_id=? AND year=? ORDER BY created_at,rowid",
+            f"SELECT id,event_id,amount,exception_required,exception_state FROM expenses WHERE org_id=? AND year=? ORDER BY created_at,{posting_order(conn)}",
             (org_id, year),
         ):
             running += row["amount"]
@@ -164,9 +282,9 @@ def install_budget_routes(app, db, actor, now, storage_root):
             )
         ]
         rows = [
-            dict(r)
+            expense_record(r)
             for r in conn.execute(
-                "SELECT * FROM expenses WHERE org_id=? AND year=? ORDER BY spent_on DESC,created_at DESC,rowid DESC",
+                f"SELECT * FROM expenses WHERE org_id=? AND year=? ORDER BY spent_on DESC,created_at DESC,{posting_order(conn)} DESC",
                 (org_id, year),
             )
         ]
@@ -175,7 +293,31 @@ def install_budget_routes(app, db, actor, now, storage_root):
             entry["balance_before"] = balance
             balance -= entry["amount"]
             entry["balance_after"] = balance
+        by_id = {row["id"]: row for row in rows}
         for row in rows:
+            row["history"] = []
+        for item in conn.execute(
+            """SELECT a.id,a.target_id,a.action,a.at,a.detail,u.name AS actor_name
+               FROM expenses e JOIN audit a ON a.target_id=e.id AND a.org_id=e.org_id
+               JOIN users u ON u.id=a.actor_id WHERE e.org_id=? AND e.year=?
+               AND a.action IN ('finance.expense-created','finance.expense-reviewed',
+                                'finance.expense-corrected','finance.expense-resubmitted')
+               ORDER BY a.at,a.id""",
+            (org_id, year),
+        ):
+            data = json.loads(item["detail"])
+            by_id[item["target_id"]]["history"].append(
+                {
+                    "id": item["id"],
+                    "at": item["at"],
+                    "actor_name": item["actor_name"],
+                    "action": item["action"],
+                    "decision": data.get("decision"),
+                    "reason": data.get("reason"),
+                }
+            )
+        for row in rows:
+            row["resolution"] = resolution_details(conn, row["id"])
             executor = dict(conn.execute("SELECT * FROM users WHERE id=?", (row["executor_id"],)).fetchone())
             row["executor_name"] = executor["name"]
             row["exception_requires_teacher"] = bool(
@@ -449,75 +591,158 @@ def install_budget_routes(app, db, actor, now, storage_root):
             )
         return snapshot(conn, user, data.org_id, data.year)
 
+    def authorize_expense(conn, user, data, *, with_receipt=False):
+        require(conn, user, data.org_id, "record")
+        if with_receipt:
+            require(conn, user, data.org_id, "evidence")
+
+    def save_expense(conn, user, data: Expense, staged: receipt_storage.StagedEvidence | None = None):
+        authorize_expense(conn, user, data, with_receipt=staged is not None)
+        existing = conn.execute(
+            "SELECT * FROM expenses WHERE created_by=? AND request_id=?", (user["id"], data.request_id)
+        ).fetchone()
+        submitted = data.model_dump(mode="json")
+        if existing:
+            if existing["org_id"] != data.org_id:
+                raise HTTPException(409, "같은 요청 ID로 다른 지출을 등록할 수 없습니다.")
+            # Compare against the initial submission even if the expense was corrected later.
+            creation = conn.execute(
+                "SELECT detail FROM audit WHERE action='finance.expense-created' AND target_id=?",
+                (existing["id"],),
+            ).fetchone()
+            original = json.loads(creation["detail"]) if creation else dict(existing)
+            original["purpose"] = original["purpose"].strip()
+            if any(original.get(key) != value for key, value in submitted.items()):
+                raise HTTPException(409, "같은 요청 ID로 다른 지출을 등록할 수 없습니다.")
+            if staged is not None:
+                receipt = conn.execute(
+                    """SELECT 1 FROM expense_evidence
+                       WHERE id=? AND expense_id=? AND filename=? AND checksum=?""",
+                    (original.get("receipt_id"), existing["id"], staged.filename, staged.checksum),
+                ).fetchone()
+                if not receipt:
+                    raise receipt_error(409, "같은 요청 ID에 다른 증빙을 저장할 수 없습니다.")
+            return existing["id"], False
+
+        annual(conn, data.org_id, data.year, True)
+        if data.spent_on.year != data.year:
+            raise HTTPException(422, "집행일과 기록 연도가 일치해야 합니다.")
+        if data.event_id:
+            event = conn.execute(
+                "SELECT 1 FROM budget_events WHERE id=? AND org_id=? AND year=? AND active=1",
+                (data.event_id, data.org_id, data.year),
+            ).fetchone()
+            if not event:
+                raise HTTPException(422, "선택한 행사는 이 단체·연도에 없습니다.")
+        executor = conn.execute(
+            "SELECT * FROM users WHERE id=? AND active=1 AND email_verified=1", (data.executor_id,)
+        ).fetchone()
+        if not executor or not org_roles(conn, dict(executor), data.org_id, now()):
+            raise HTTPException(422, "실제 집행 담당자는 현재 단체 담당자여야 합니다.")
+        ident, at = str(uuid4()), stamp(now())
+        conn.execute(
+            "INSERT INTO expenses(id,org_id,year,event_id,spent_on,purpose,amount,executor_id,executor_was_head,created_by,request_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                ident,
+                data.org_id,
+                data.year,
+                data.event_id,
+                data.spent_on.isoformat(),
+                data.purpose.strip(),
+                data.amount,
+                data.executor_id,
+                int(is_head(conn, dict(executor), data.org_id, now())),
+                user["id"],
+                data.request_id,
+                at,
+                at,
+            ),
+        )
+        if data.resolution:
+            save_resolution(conn, ident, data.resolution)
+        recompute_exceptions(conn, data.org_id, data.year)
+        if staged is not None:
+            row = conn.execute("SELECT * FROM expenses WHERE id=?", (ident,)).fetchone()
+            receipt = receipt_storage.link_evidence(conn, user, row, staged, now())
+            submitted["receipt_id"] = receipt["id"]
+        audit(conn, user, data.org_id, "finance.expense-created", ident, submitted)
+        return ident, True
+
     @app.post("/api/budgets/expenses")
     def add_expense(data: Expense, user=Depends(actor), conn=Depends(db)):
         with transaction(conn):
-            require(conn, user, data.org_id, "record")
-            existing = conn.execute(
-                "SELECT * FROM expenses WHERE created_by=? AND request_id=?", (user["id"], data.request_id)
-            ).fetchone()
-            if existing:
-                if any(
-                    [
-                        existing["org_id"] != data.org_id,
-                        existing["year"] != data.year,
-                        existing["event_id"] != data.event_id,
-                        existing["spent_on"] != data.spent_on.isoformat(),
-                        existing["purpose"] != data.purpose.strip(),
-                        existing["amount"] != data.amount,
-                        existing["executor_id"] != data.executor_id,
-                    ]
-                ):
-                    raise HTTPException(409, "같은 요청 ID로 다른 지출을 등록할 수 없습니다.")
-                return {"id": existing["id"]}
-            annual(conn, data.org_id, data.year, True)
-            if data.spent_on.year != data.year:
-                raise HTTPException(422, "집행일과 기록 연도가 일치해야 합니다.")
-            if data.event_id:
-                event = conn.execute(
-                    "SELECT 1 FROM budget_events WHERE id=? AND org_id=? AND year=? AND active=1",
-                    (data.event_id, data.org_id, data.year),
-                ).fetchone()
-                if not event:
-                    raise HTTPException(422, "선택한 행사는 이 단체·연도에 없습니다.")
-            executor = conn.execute(
-                "SELECT * FROM users WHERE id=? AND active=1 AND email_verified=1", (data.executor_id,)
-            ).fetchone()
-            if not executor or not org_roles(conn, dict(executor), data.org_id, now()):
-                raise HTTPException(422, "실제 집행 담당자는 현재 단체 담당자여야 합니다.")
-            ident, at = str(uuid4()), stamp(now())
-            conn.execute(
-                "INSERT INTO expenses(id,org_id,year,event_id,spent_on,purpose,amount,executor_id,executor_was_head,created_by,request_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (
-                    ident,
-                    data.org_id,
-                    data.year,
-                    data.event_id,
-                    data.spent_on.isoformat(),
-                    data.purpose.strip(),
-                    data.amount,
-                    data.executor_id,
-                    int(is_head(conn, dict(executor), data.org_id, now())),
-                    user["id"],
-                    data.request_id,
-                    at,
-                    at,
-                ),
-            )
-            recompute_exceptions(conn, data.org_id, data.year)
-            audit(conn, user, data.org_id, "finance.expense-created", ident, data.model_dump(mode="json"))
+            ident, _ = save_expense(conn, user, data)
         return {"id": ident}
+
+    @app.post("/api/budgets/expenses/submit")
+    async def submit_expense(request: Request, user=Depends(actor), conn=Depends(db)):
+        content_type, _ = parse_options_header(request.headers.get("content-type"))
+        if content_type != b"multipart/form-data":
+            raise receipt_error(415, "지출 정보와 증빙은 multipart/form-data로 보내 주세요.")
+        parser = ExpenseSubmissionParser(
+            request, lambda data: authorize_expense(conn, user, data, with_receipt=True)
+        )
+        staged = None
+        committed = False
+        try:
+            form = await parser.parse()
+            try:
+                if not parser.complete:
+                    raise receipt_error(400, "증빙 전송이 완료되지 않았습니다.")
+                data, receipt = parser.expense, form.get("receipt")
+                if data is None:
+                    raise HTTPException(422, "지출 정보를 JSON 텍스트로 보내 주세요.")
+                if not isinstance(receipt, UploadFile) or not receipt.filename:
+                    raise receipt_error(422, "증빙 파일을 선택해 주세요.")
+                try:
+                    staged = await receipt_storage.stage_evidence(
+                        store, receipt.filename, receipt_chunks(receipt)
+                    )
+                except HTTPException as exc:
+                    raise receipt_error(exc.status_code, exc.detail) from exc
+            finally:
+                await form.close()
+            with transaction(conn):
+                current_user = actor(request, conn)
+                if current_user["id"] != user["id"]:
+                    raise HTTPException(401, "업로드 중 세션이 변경되었습니다.")
+                ident, created = save_expense(conn, current_user, data, staged)
+            committed = created
+            return {"id": ident}
+        except (ClientDisconnect, MultiPartException) as exc:
+            raise receipt_error(400, "증빙 전송 형식이 올바르지 않거나 완료되지 않았습니다.") from exc
+        except OSError as exc:
+            raise receipt_error(500, "증빙을 저장하지 못했습니다.") from exc
+        finally:
+            if staged is not None and not committed:
+                staged.path.unlink(missing_ok=True)
 
     @app.post("/api/budgets/expenses/{ident}/correct")
     def correct_expense(ident: str, data: Correction, user=Depends(actor), conn=Depends(db)):
         with transaction(conn):
             row = expense(conn, ident, user, "record", True)
             check_revision(row, data.expected_revision)
-            after = {"amount": data.amount, "purpose": data.purpose.strip()}
+            if data.resubmit and row["review_state"] != "rejected":
+                raise HTTPException(409, "반려된 결의서만 보완해 재제출할 수 있습니다.")
+            old_resolution = resolution_details(conn, ident)
+            before = {"amount": row["amount"], "purpose": row["purpose"], "resolution": old_resolution}
+            after = {
+                "amount": data.amount,
+                "purpose": data.purpose,
+                "resolution": data.resolution.model_dump() if data.resolution else old_resolution,
+            }
             conn.execute(
-                "UPDATE expenses SET amount=?,purpose=?,review_state='pending',reviewed_by=NULL,reviewed_at=NULL,exception_state='none',exception_by=NULL,exception_at=NULL,revision=revision+1,updated_at=? WHERE id=?",
+                "UPDATE expenses SET amount=?,purpose=?,review_state='pending',reviewed_by=NULL,reviewed_at=NULL,revision=revision+1,updated_at=? WHERE id=?",
                 (after["amount"], after["purpose"], stamp(now()), ident),
             )
+            if not data.resubmit or data.amount != row["amount"]:
+                conn.execute(
+                    "UPDATE expenses SET exception_state='none',exception_by=NULL,exception_at=NULL WHERE id=?",
+                    (ident,),
+                )
+                recompute_exceptions(conn, row["org_id"], row["year"])
+            if data.resolution:
+                save_resolution(conn, ident, data.resolution)
             conn.execute(
                 "INSERT INTO expense_changes VALUES (?,?,?,?,?,?,?)",
                 (
@@ -526,19 +751,18 @@ def install_budget_routes(app, db, actor, now, storage_root):
                     user["id"],
                     stamp(now()),
                     data.reason,
-                    json.dumps({"amount": row["amount"], "purpose": row["purpose"]}, ensure_ascii=False),
+                    json.dumps(before, ensure_ascii=False),
                     json.dumps(after, ensure_ascii=False),
                 ),
             )
-            recompute_exceptions(conn, row["org_id"], row["year"])
             audit(
                 conn,
                 user,
                 row["org_id"],
-                "finance.expense-corrected",
+                "finance.expense-resubmitted" if data.resubmit else "finance.expense-corrected",
                 ident,
                 {
-                    "before": {"amount": row["amount"], "purpose": row["purpose"]},
+                    "before": before,
                     "after": after,
                     "reason": data.reason,
                 },
@@ -636,7 +860,10 @@ def install_budget_routes(app, db, actor, now, storage_root):
     def evidence_list(ident: str, user=Depends(actor), conn=Depends(db)):
         expense(conn, ident, user, "evidence")
         return [
-            {k: r[k] for k in ("id", "filename", "size", "checksum", "created_by", "created_at")}
+            {
+                **{k: r[k] for k in ("id", "filename", "size", "checksum", "created_by", "created_at")},
+                "previewable": receipt_storage.is_previewable(r["filename"]),
+            }
             for r in conn.execute(
                 "SELECT * FROM expense_evidence WHERE expense_id=? ORDER BY created_at", (ident,)
             )
@@ -647,54 +874,27 @@ def install_budget_routes(app, db, actor, now, storage_root):
         ident: str, request: Request, filename: str, user=Depends(actor), conn=Depends(db)
     ):
         expense(conn, ident, user, "evidence", True)
-        valid_filename(filename)
-        key = uuid4().hex
-        path = store.path(key)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        size = 0
+        upload = await receipt_storage.stage_evidence(store, filename, request.stream())
+        linked = False
         try:
-            with path.open("xb") as output:
-                async for chunk in request.stream():
-                    size += len(chunk)
-                    if size > MAX_FILE_SIZE:
-                        raise HTTPException(413, "파일은 50 MiB 이하로 등록해 주세요.")
-                    output.write(chunk)
-            if size == 0:
-                raise HTTPException(422, "빈 파일은 등록할 수 없습니다.")
-            validate_content(path, filename)
-            digest = checksum(path)
             with transaction(conn):
-                session = conn.execute(
-                    "SELECT 1 FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.user_id=? AND s.expires_at>? AND u.active=1 AND u.email_verified=1",
-                    (
-                        hashlib.sha256(request.cookies.get("yeonieum_session", "").encode()).hexdigest(),
-                        user["id"],
-                        stamp(now()),
-                    ),
+                current_user = actor(request, conn)
+                row = expense(conn, ident, current_user, "evidence", True)
+                existing = conn.execute(
+                    """SELECT id,size,checksum FROM expense_evidence
+                       WHERE expense_id=? AND filename=? AND checksum=?""",
+                    (ident, upload.filename, upload.checksum),
                 ).fetchone()
-                if not session:
-                    raise HTTPException(401, "업로드 중 세션이 종료되었습니다.")
-                row = expense(conn, ident, user, "evidence", True)
-                record_id = str(uuid4())
-                conn.execute(
-                    "INSERT INTO expense_evidence VALUES (?,?,?,?,?,?,?,?)",
-                    (record_id, ident, key, filename, size, digest, user["id"], stamp(now())),
-                )
-                audit(
-                    conn,
-                    user,
-                    row["org_id"],
-                    "finance.evidence-added",
-                    record_id,
-                    {"expense_id": ident, "filename": filename, "size": size, "checksum": digest},
-                )
-            return {"id": record_id, "size": size, "checksum": digest}
-        except BaseException:
-            path.unlink(missing_ok=True)
-            raise
+                if existing:
+                    return dict(existing)
+                result = receipt_storage.link_evidence(conn, current_user, row, upload, now())
+            linked = True
+            return result
+        finally:
+            if not linked:
+                upload.path.unlink(missing_ok=True)
 
-    @app.get("/api/budgets/evidence/{ident}/download")
-    def download_evidence(ident: str, user=Depends(actor), conn=Depends(db)):
+    def serve_evidence(ident, user, conn, *, inline):
         row = conn.execute(
             "SELECT v.*,e.org_id FROM expense_evidence v JOIN expenses e ON e.id=v.expense_id WHERE v.id=?",
             (ident,),
@@ -702,19 +902,22 @@ def install_budget_routes(app, db, actor, now, storage_root):
         if not row or not can_view(conn, user, row["org_id"], now()):
             raise HTTPException(404, "증빙을 찾을 수 없습니다.")
         require(conn, user, row["org_id"], "evidence")
-        path = store.verified(row)
+        response = receipt_storage.evidence_response(store, row, inline=inline)
         with transaction(conn):
             audit(
                 conn,
                 user,
                 row["org_id"],
-                "finance.evidence-download-authorized",
+                "finance.evidence-preview-authorized" if inline else "finance.evidence-download-authorized",
                 ident,
                 {"expense_id": row["expense_id"]},
             )
-        return FileResponse(
-            path,
-            media_type="application/octet-stream",
-            filename=row["filename"],
-            headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
-        )
+        return response
+
+    @app.get("/api/budgets/evidence/{ident}/preview")
+    def preview_evidence(ident: str, user=Depends(actor), conn=Depends(db)):
+        return serve_evidence(ident, user, conn, inline=True)
+
+    @app.get("/api/budgets/evidence/{ident}/download")
+    def download_evidence(ident: str, user=Depends(actor), conn=Depends(db)):
+        return serve_evidence(ident, user, conn, inline=False)

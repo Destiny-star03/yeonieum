@@ -29,6 +29,12 @@ export default function FolderDialog({
   const [busy, setBusy] = useState(false),
     [error, setError] = useState("");
   const [saved, setSaved] = useState<LibraryFolder | null>(null);
+  const canShare = options.units.some(
+    (unit) =>
+      unit.org_id === selectedOrg &&
+      unit.audiences.some((choice) => choice.key === "organization"),
+  );
+  const effectiveSharing = canShare ? sharing : "private";
   useEffect(() => {
     dialog.current?.showModal();
   }, []);
@@ -43,7 +49,7 @@ export default function FolderDialog({
           name,
           org_id: selectedOrg,
           academic_year: selectedYear,
-          audience: sharing,
+          audience: effectiveSharing,
           parent_id: parent?.id || null,
         };
         const result = await api<{ id: string }>("/documents/folders", data);
@@ -123,11 +129,13 @@ export default function FolderDialog({
             폴더 공개 범위
             <select
               disabled={Boolean(parent)}
-              value={sharing}
+              value={effectiveSharing}
               onChange={(e) => setSharing(e.target.value as typeof sharing)}
             >
               <option value="private">개인 보관 · 나만 보기</option>
-              <option value="organization">단체 공유 · 단체 담당자</option>
+              {canShare && (
+                <option value="organization">단체 공유 · 단체 담당자</option>
+              )}
             </select>
           </label>
           <p className="form-note">

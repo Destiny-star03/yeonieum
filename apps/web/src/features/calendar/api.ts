@@ -17,11 +17,18 @@ export type Repeat = {
 export type PersonOption = { id: string; name: string };
 export type DocumentOption = { id: string; title: string; version: number };
 export type EventLink = { title: string; url: string };
+export type EventCalendar = {
+  unit_id: string;
+  unit_name: string;
+  org_id: string;
+  org_name: string;
+};
 export type CalendarEvent = {
   external_source?: "school" | "holidays";
   source_url?: string;
   id: string;
   instance_key: string;
+  occurrence_start?: string;
   time_zone: "Asia/Seoul" | "UTC";
   recurrence: Repeat | null;
   participant_ids: string[];
@@ -61,6 +68,16 @@ export type CalendarEvent = {
   org_id: string;
   org_name: string;
   unit_name: string;
+  calendars?: EventCalendar[];
+};
+export function eventCalendars(event: CalendarEvent): EventCalendar[] {
+  return event.calendars?.length ? event.calendars : [event];
+}
+export type OccurrenceScope = "single" | "following";
+export type DisplayedCalendarEvent = CalendarEvent & {
+  pendingMove?: true;
+  displayColor?: CalendarColor;
+  displayCalendar?: EventCalendar;
 };
 export type Draft = {
   day: string;
@@ -87,3 +104,4 @@ export type CalendarPreferences = {
   compact: boolean;
   zone: "Asia/Seoul" | "UTC";
 };
+import type { CalendarColor } from "./calendarColors";

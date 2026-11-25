@@ -9,6 +9,18 @@ from yeonieum.modules.access.schemas import StrictModel
 KST = timezone(timedelta(hours=9))
 
 
+def validate_event_period(start, end, all_day):
+    if start.tzinfo is None or end.tzinfo is None:
+        raise ValueError("일정 시간에는 시간대가 필요합니다.")
+    if start >= end:
+        raise ValueError("종료는 시작 이후여야 합니다.")
+    if all_day and any(
+        (d.hour, d.minute, d.second, d.microsecond) != (0, 0, 0, 0)
+        for d in (start.astimezone(KST), end.astimezone(KST))
+    ):
+        raise ValueError("종일 일정은 한국 시간 자정부터 다음 날 자정까지 설정해 주세요.")
+
+
 class Repeat(StrictModel):
     frequency: Literal["daily", "weekly", "monthly", "yearly"]
     interval: int = Field(default=1, ge=1, le=12, strict=True)
@@ -93,15 +105,7 @@ class EventInput(StrictModel):
 
     @model_validator(mode="after")
     def valid_period(self):
-        if self.starts_at.tzinfo is None or self.ends_at.tzinfo is None:
-            raise ValueError("일정 시간에는 시간대가 필요합니다.")
-        if self.starts_at >= self.ends_at:
-            raise ValueError("종료는 시작 이후여야 합니다.")
-        if self.all_day and any(
-            (d.hour, d.minute, d.second, d.microsecond) != (0, 0, 0, 0)
-            for d in [self.starts_at.astimezone(KST), self.ends_at.astimezone(KST)]
-        ):
-            raise ValueError("종일 일정은 한국 시간 자정부터 다음 날 자정까지 설정해 주세요.")
+        validate_event_period(self.starts_at, self.ends_at, self.all_day)
         if any(type(m) is not int or m < 0 or m > 10080 for m in self.reminder_minutes):
             raise ValueError("리마인더는 시작 전 0~10080분 사이로 설정해 주세요.")
         if (
@@ -118,8 +122,27 @@ class EventInput(StrictModel):
         return self
 
 
+class EventCreate(EventInput):
+    additional_unit_ids: list[str] = Field(default_factory=list)
+
+
 class EventUpdate(EventInput):
     expected_revision: int = Field(ge=1, strict=True)
+
+
+class OccurrenceUpdate(StrictModel):
+    expected_revision: int = Field(ge=1, strict=True)
+    scope: Literal["single", "following"]
+    occurrence_start: datetime
+    starts_at: datetime
+    ends_at: datetime
+
+    @field_validator("occurrence_start", "starts_at", "ends_at")
+    @classmethod
+    def aware_date(cls, value):
+        if value.tzinfo is None:
+            raise ValueError("일정 시간에는 시간대가 필요합니다.")
+        return value
 
 
 class EventRemove(StrictModel):

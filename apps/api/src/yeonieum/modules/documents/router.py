@@ -6,7 +6,7 @@ import json
 from datetime import timedelta, timezone
 from uuid import uuid4
 
-from fastapi import Depends, HTTPException, Query, Request
+from fastapi import Depends, HTTPException, Query, Request, Response
 from starlette.concurrency import run_in_threadpool
 from starlette.responses import FileResponse
 
@@ -14,16 +14,20 @@ from yeonieum.core.database import audit, stamp, transaction
 from yeonieum.modules.access.policy import unit
 from yeonieum.modules.documents.folders import folder_for, install_folder_routes, validate_folder
 from yeonieum.modules.documents.policy import (
-    can_create,
     can_manage,
+    can_move,
     can_read,
     creation_options,
     validate_audience,
 )
+from yeonieum.modules.documents.preview import file_preview
+from yeonieum.modules.documents.print_preview import PrintPreview
+from yeonieum.modules.documents.reader import READER_ERRORS, read_content, read_page
 from yeonieum.modules.documents.schemas import (
     MAX_FILE_SIZE,
     Change,
     Metadata,
+    Move,
     RestoreVersion,
     StaffScope,
     Update,
@@ -36,10 +40,12 @@ from yeonieum.modules.documents.storage import (
     valid_filename,
     validate_content,
 )
+from yeonieum.modules.notifications.service import notify_document
 
 
 def install_document_routes(app, db, actor, now, storage_root):
     store = FileStore(storage_root)
+    print_preview = PrintPreview(storage_root)
     install_folder_routes(app, db, actor, now)
 
     def document(conn, ident, user, manage=False, include_trash=False):
@@ -73,6 +79,7 @@ def install_document_routes(app, db, actor, now, storage_root):
             "org_name": unit(conn, row["org_id"])["name"],
             "unit_name": unit(conn, row["unit_id"])["name"],
             "can_manage": can_manage(conn, user, row, now()),
+            "can_move": can_move(conn, user, row, now()),
             "filename": latest["filename"],
             "size": latest["size"],
             "folder_name": conn.execute(
@@ -84,10 +91,16 @@ def install_document_routes(app, db, actor, now, storage_root):
 
     def validate_metadata(conn, user, metadata):
         target = unit(conn, metadata.unit_id)
-        if not can_create(conn, user, target, now()):
-            raise HTTPException(403, "현재 담당 범위에만 자료를 등록할 수 있습니다.")
         validate_audience(conn, user, target, metadata.audience, now())
-        validate_folder(conn, metadata, user, now())
+        validate_folder(
+            conn,
+            metadata.folder_id,
+            user,
+            now(),
+            org_id=target["org_id"],
+            academic_year=metadata.academic_year,
+            audience=metadata.audience,
+        )
         return target
 
     @app.get("/api/documents/options")
@@ -176,6 +189,12 @@ def install_document_routes(app, db, actor, now, storage_root):
     ):
         if folder_id and folder_id != "root":
             folder_for(conn, folder_id, user, now())
+        query = q.strip().casefold()
+        folders = (
+            {row["id"]: row for row in conn.execute("SELECT id,parent_id,name FROM document_folders")}
+            if query
+            else {}
+        )
         visible = []
         for row in conn.execute("SELECT * FROM documents ORDER BY updated_at DESC,id"):
             # Permission and state filters precede counts, search and pagination.
@@ -211,9 +230,16 @@ def install_document_routes(app, db, actor, now, storage_root):
             }
             if file_type and extension not in groups.get(file_type, set()):
                 continue
-            haystack = " ".join(str(item[k]) for k in ["title", "description", "filename"]).casefold()
-            if q.strip().casefold() not in haystack:
-                continue
+            if query:
+                names = []
+                parent_id = row["folder_id"]
+                while parent_id in folders and len(names) < len(folders):
+                    parent = folders[parent_id]
+                    names.append(parent["name"])
+                    parent_id = parent["parent_id"]
+                text = [item[key] for key in ("title", "description", "filename", "folder")]
+                if query not in " ".join([*text, *reversed(names)]).casefold():
+                    continue
             visible.append(item)
         visible.sort(
             key=lambda item: item[{"updated": "updated_at", "name": "title", "size": "size"}[sort]],
@@ -270,7 +296,10 @@ def install_document_routes(app, db, actor, now, storage_root):
             document(conn, row["document_id"], user, manage=True)
         else:
             validate_metadata(conn, user, Metadata(**json.loads(row["metadata"])["metadata"]))
-        return {k: row[k] for k in ["id", "state", "error", "result_id", "expires_at"]}
+        return {
+            **{k: row[k] for k in ["id", "state", "error", "result_id", "expires_at"]},
+            "expired": row["expires_at"] <= stamp(now()),
+        }
 
     @app.put("/api/documents/uploads/{upload_id}/content")
     async def upload_content(upload_id: str, request: Request, user=Depends(actor), conn=Depends(db)):
@@ -303,14 +332,14 @@ def install_document_routes(app, db, actor, now, storage_root):
                 async for chunk in request.stream():
                     size += len(chunk)
                     if size > MAX_FILE_SIZE or size > saved["expected_size"]:
-                        raise HTTPException(413, "파일은 최대 50 MiB이며 등록한 크기와 같아야 합니다.")
+                        raise HTTPException(413, "파일은 최대 200 MiB이며 등록한 크기와 같아야 합니다.")
                     await run_in_threadpool(output.write, chunk)
             if (
                 size != saved["expected_size"]
                 or await run_in_threadpool(checksum, path) != saved["expected_checksum"]
             ):
                 raise HTTPException(422, "파일 크기 또는 체크섬이 일치하지 않습니다. 다시 등록해 주세요.")
-            await run_in_threadpool(validate_content, path, saved["filename"])
+            await run_in_threadpool(validate_content, path, saved["filename"], max_unpacked=2 * MAX_FILE_SIZE)
             with transaction(conn):
                 # A role/account/unit/share may have changed while bytes were in flight.
                 current_user = conn.execute(
@@ -374,6 +403,7 @@ def install_document_routes(app, db, actor, now, storage_root):
                     "UPDATE document_uploads SET state='READY',result_id=? WHERE id=?", (ident, upload_id)
                 )
                 audit(conn, user, org_id, "document.version-added", ident, {"version": number, "size": size})
+                notify_document(conn, user["id"], ident, f"version:{number}", now())
             committed = True
             return {"id": ident, "version": number, "state": "READY"}
         except (Exception, asyncio.CancelledError) as exc:
@@ -449,6 +479,41 @@ def install_document_routes(app, db, actor, now, storage_root):
                 document_id,
                 {"before": {k: row[k] for k in audit_values}, "after": audit_values},
             )
+            if row["audience"] != data.metadata.audience:
+                notify_document(conn, user["id"], document_id, f"share:{row['revision'] + 1}", now(), row)
+        return {"ok": True}
+
+    @app.post("/api/documents/{document_id}/move")
+    def move(document_id: str, data: Move, user=Depends(actor), conn=Depends(db)):
+        with transaction(conn):
+            row = document(conn, document_id, user, manage=True)
+            current_time = now()
+            if not can_move(conn, user, row, current_time):
+                raise HTTPException(403, "이 자료를 폴더로 이동할 권한이 없습니다.")
+            if row["folder_id"] == data.folder_id:
+                return {"ok": True}
+            check_revision(row, data.expected_revision)
+            validate_folder(
+                conn,
+                data.folder_id,
+                user,
+                current_time,
+                org_id=row["org_id"],
+                academic_year=row["academic_year"],
+                audience=row["audience"],
+            )
+            conn.execute(
+                "UPDATE documents SET folder_id=?,revision=revision+1,updated_at=? WHERE id=?",
+                (data.folder_id, stamp(current_time), document_id),
+            )
+            audit(
+                conn,
+                user,
+                row["org_id"],
+                "document.moved",
+                document_id,
+                {"from_folder_id": row["folder_id"], "to_folder_id": data.folder_id},
+            )
         return {"ok": True}
 
     @app.post("/api/documents/{document_id}/trash")
@@ -512,6 +577,50 @@ def install_document_routes(app, db, actor, now, storage_root):
                 {"source": data.version, "version": number},
             )
         return {"ok": True, "version": number}
+
+    def check_readable_version(conn, document_id, number, user):
+        row = document(conn, document_id, user)
+        if row["current_version"] != number:
+            raise HTTPException(404, "현재 파일의 미리보기만 열 수 있습니다.")
+
+    @app.get("/api/documents/{document_id}/versions/{number}/preview")
+    def preview(document_id: str, number: int, user=Depends(actor), conn=Depends(db)):
+        check_readable_version(conn, document_id, number, user)
+        saved = version(conn, document_id, number)
+        result = file_preview(store.verified(saved), saved["filename"])
+        check_readable_version(conn, document_id, number, user)
+        if not result:
+            return Response(status_code=204)
+        content, media_type = result
+        return Response(content, media_type=media_type)
+
+    @app.get("/api/documents/{document_id}/versions/{number}/read")
+    def reader(document_id: str, number: int, user=Depends(actor), conn=Depends(db)):
+        check_readable_version(conn, document_id, number, user)
+        saved = version(conn, document_id, number)
+        path = store.verified(saved)
+        try:
+            pdf = print_preview.pdf(path, saved["filename"], saved["checksum"])
+            result = read_content(path, saved["filename"], pdf)
+        except READER_ERRORS:
+            result = {"kind": "unavailable"}
+        check_readable_version(conn, document_id, number, user)
+        return result
+
+    @app.get("/api/documents/{document_id}/versions/{number}/read/pages/{page}")
+    def reader_page(document_id: str, number: int, page: int, user=Depends(actor), conn=Depends(db)):
+        check_readable_version(conn, document_id, number, user)
+        saved = version(conn, document_id, number)
+        path = store.verified(saved)
+        try:
+            pdf = print_preview.pdf(path, saved["filename"], saved["checksum"]) if page > 0 else None
+            image = read_page(path, saved["filename"], page, pdf) if page > 0 else None
+        except READER_ERRORS:
+            image = None
+        check_readable_version(conn, document_id, number, user)
+        if image is None:
+            raise HTTPException(404, "표시할 페이지가 없습니다.")
+        return Response(image, media_type="image/jpeg")
 
     @app.get("/api/documents/{document_id}/versions/{number}/download")
     def download(document_id: str, number: int, user=Depends(actor), conn=Depends(db)):

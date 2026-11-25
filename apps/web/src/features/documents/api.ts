@@ -1,4 +1,5 @@
 import { api } from "../../shared/api";
+import { createSHA256 } from "hash-wasm";
 
 export type LibraryMetadata = {
   unit_id: string;
@@ -23,6 +24,7 @@ export type LibraryDocument = LibraryMetadata & {
   current_version: number;
   revision: number;
   can_manage: boolean;
+  can_move: boolean;
   filename: string;
   size: number;
   folder_name?: string | null;
@@ -80,26 +82,57 @@ export async function uploadFile(
   metadata: LibraryMetadata | null,
   document: LibraryDocument | null,
   note: string,
+  {
+    maxSize,
+    sessionId,
+    onPrepared,
+  }: {
+    maxSize: number;
+    sessionId?: string;
+    onPrepared: (id: string) => void;
+  },
 ) {
-  if (!file.size || file.size > 50 * 1024 * 1024)
-    throw new Error("파일은 1바이트~50 MiB여야 합니다.");
-  const digest = await crypto.subtle.digest(
-    "SHA-256",
-    await file.arrayBuffer(),
-  );
-  const checksum = Array.from(new Uint8Array(digest), (n) =>
-    n.toString(16).padStart(2, "0"),
-  ).join("");
-  const session = await api<{ id: string }>("/documents/uploads", {
-    filename: file.name,
-    size: file.size,
-    checksum,
-    metadata,
-    document_id: document?.id || null,
-    expected_revision: document?.revision || null,
-    note,
-  });
-  const response = await fetch(`/api/documents/uploads/${session.id}/content`, {
+  if (!file.size || file.size > maxSize)
+    throw new Error(`파일은 1바이트~${maxSize / 1024 / 1024} MiB여야 합니다.`);
+  if (sessionId) {
+    const session = await api<{
+      state: string;
+      expired: boolean;
+      result_id: string | null;
+    }>(`/documents/uploads/${sessionId}`);
+    if (session.state === "READY" && session.result_id)
+      return { id: session.result_id };
+    if (session.state === "PROCESSING" && !session.expired)
+      throw new Error(
+        "서버에서 파일을 처리하고 있습니다. 잠시 후 다시 확인해 주세요.",
+      );
+    if (session.state !== "PENDING" || session.expired) sessionId = undefined;
+  }
+  if (!sessionId) {
+    const hash = await createSHA256();
+    const reader = file.stream().getReader();
+    try {
+      for (;;) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        hash.update(chunk.value);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    const session = await api<{ id: string }>("/documents/uploads", {
+      filename: file.name,
+      size: file.size,
+      checksum: hash.digest("hex"),
+      metadata,
+      document_id: document?.id || null,
+      expected_revision: document?.revision || null,
+      note,
+    });
+    sessionId = session.id;
+    onPrepared(sessionId);
+  }
+  const response = await fetch(`/api/documents/uploads/${sessionId}/content`, {
     method: "PUT",
     credentials: "same-origin",
     body: file,

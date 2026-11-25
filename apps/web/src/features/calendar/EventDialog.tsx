@@ -1,6 +1,14 @@
-import { useEffect, useId, useRef, useState, type FormEvent } from "react";
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from "react";
 import {
   api,
+  eventCalendars,
   type CalendarUnit,
   type CalendarEvent,
   type Draft,
@@ -15,14 +23,22 @@ import {
   localInstant,
   shiftDay,
 } from "./dates";
-import { DatePicker, TimePicker, durationLabel } from "./DateTimePickers";
+import {
+  DatePicker,
+  PickerPopover,
+  TimePicker,
+  durationLabel,
+} from "./DateTimePickers";
 import ColorPicker from "./ColorPicker";
+import CalendarIcon, { type CalendarIconName } from "./CalendarIcon";
+import type { CalendarColor } from "./calendarColors";
 import RepeatPicker from "./RepeatPicker";
 
 type Props = {
   draft: Draft;
   units: CalendarUnit[];
   defaultUnit: string;
+  organizationColors: ReadonlyMap<string, CalendarColor>;
   defaultZone: "Asia/Seoul" | "UTC";
   onClose: () => void;
   onSaved: (event: CalendarEvent) => void;
@@ -64,7 +80,9 @@ function initial(
   }
   return {
     title: event ? (draft.copy ? `${event.title} 사본` : event.title) : "",
-    unit: event?.unit_id || defaultUnit,
+    unitIds: event
+      ? eventCalendars(event).map((target) => target.unit_id)
+      : [defaultUnit].filter(Boolean),
     allDay: event?.all_day ?? draft.allDay ?? false,
     startDay: start.day,
     endDay: end.day,
@@ -92,10 +110,84 @@ function periodDuration(values: ReturnType<typeof initial>) {
     Date.parse(`${values.startDay}T${values.startTime}:00Z`);
   return Number.isFinite(duration) && duration > 0 ? duration : 0;
 }
+function EditorPopoverRow({
+  label,
+  icon,
+  detail,
+  open,
+  onToggle,
+  onClose,
+  children,
+}: {
+  label: string;
+  icon: CalendarIconName;
+  detail?: string;
+  open: boolean;
+  onToggle: () => void;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  const anchor = useRef<HTMLButtonElement>(null);
+  const content = useRef<HTMLDivElement>(null);
+  const id = useId();
+  useEffect(() => {
+    if (open)
+      content.current
+        ?.querySelector<HTMLElement>(
+          "button:enabled, input:enabled, select:enabled, a[href]",
+        )
+        ?.focus({ preventScroll: true });
+  }, [open]);
+  return (
+    <>
+      <button
+        ref={anchor}
+        type="button"
+        className="cal-editor-inline-row"
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        aria-controls={open ? id : undefined}
+        onClick={onToggle}
+      >
+        <CalendarIcon name={icon} />
+        <span>{label}</span>
+        {detail && <span className="cal-editor-row-value">{detail}</span>}
+      </button>
+      {open && (
+        <PickerPopover
+          anchor={anchor}
+          id={id}
+          label={label}
+          className="cal-editor-popup"
+          onClose={onClose}
+        >
+          <div ref={content}>{children}</div>
+        </PickerPopover>
+      )}
+    </>
+  );
+}
+type EditorPopup = "participants" | "links" | "reminders";
+
+function validLink(value: string) {
+  if (!value.trim()) return true;
+  if (!/^https?:\/\//i.test(value.trim())) return false;
+  try {
+    const url = new URL(value.trim());
+    return (
+      ["http:", "https:"].includes(url.protocol) &&
+      !url.username &&
+      !url.password
+    );
+  } catch {
+    return false;
+  }
+}
 export default function EventDialog({
   draft,
   units,
   defaultUnit,
+  organizationColors,
   defaultZone,
   onClose,
   onSaved,
@@ -118,6 +210,11 @@ export default function EventDialog({
   const [peopleSearch, setPeopleSearch] = useState("");
   const [docSearch, setDocSearch] = useState("");
   const titleRef = useRef<HTMLInputElement>(null);
+  const peopleRef = useRef<HTMLInputElement>(null);
+  const peopleChoices = useRef<HTMLDivElement>(null);
+  const peoplePopupId = useId();
+  const linkInputId = useId();
+  const [popup, setPopup] = useState<EditorPopup | null>(null);
   const editable = !draft.event || draft.event.can_edit;
   useEffect(() => {
     if (!values.allDay) {
@@ -142,6 +239,7 @@ export default function EventDialog({
     setError("");
     setPeopleSearch("");
     setDocSearch("");
+    setPopup(null);
     onDirty(false);
     requestAnimationFrame(() =>
       titleRef.current?.focus({ preventScroll: true }),
@@ -151,9 +249,9 @@ export default function EventDialog({
     let alive = true;
     setPeople([]);
     setDocuments([]);
-    if (values.unit && editable)
+    if (values.unitIds.length && editable)
       api<{ participants: PersonOption[]; documents: DocumentOption[] }>(
-        `/calendar/editor-options?${new URLSearchParams({ unit_id: values.unit })}`,
+        `/calendar/editor-options?${new URLSearchParams(values.unitIds.map((id) => ["unit_id", id]))}`,
       )
         .then((result) => {
           if (alive) {
@@ -167,7 +265,7 @@ export default function EventDialog({
     return () => {
       alive = false;
     };
-  }, [values.unit, editable]);
+  }, [values.unitIds, editable]);
   function change<K extends keyof typeof values>(
     key: K,
     value: (typeof values)[K],
@@ -201,9 +299,15 @@ export default function EventDialog({
         : [...values[key], id],
     );
   }
+  function togglePopup(target: EditorPopup) {
+    setPopup((current) => (current === target ? null : target));
+  }
+  function closePopup(target: EditorPopup) {
+    setPopup((current) => (current === target ? null : current));
+  }
   async function save(e: FormEvent) {
     e.preventDefault();
-    if (!editable) return;
+    if (!editable || !values.unitIds.length) return;
     setError("");
     let starts: string, ends: string;
     try {
@@ -221,10 +325,19 @@ export default function EventDialog({
       setError("종료는 시작 이후여야 합니다. 날짜와 시간을 확인해 주세요.");
       return;
     }
+    const invalidLink = values.links.findIndex((link) => !validLink(link.url));
+    if (invalidLink >= 0) {
+      setError("링크 주소에 http 또는 https 주소를 입력해 주세요.");
+      setPopup("links");
+      requestAnimationFrame(() =>
+        document.getElementById(`${linkInputId}-${invalidLink}`)?.focus(),
+      );
+      return;
+    }
     setBusy(true);
     try {
       const body = {
-        unit_id: values.unit,
+        unit_id: values.unitIds[0],
         title: values.title,
         starts_at: starts,
         ends_at: ends,
@@ -249,7 +362,7 @@ export default function EventDialog({
           : "/calendar/events",
         draft.event
           ? { ...body, expected_revision: draft.event.revision }
-          : body,
+          : { ...body, additional_unit_ids: values.unitIds.slice(1) },
       );
       onDirty(false);
       onSaved(event);
@@ -282,6 +395,61 @@ export default function EventDialog({
       (p) => !people.some((x) => x.id === p.id),
     ),
   ];
+  const matchingPeople = eventPeople.filter((person) =>
+    person.name.includes(peopleSearch),
+  );
+  const selectedUnits = values.unitIds.flatMap((id) =>
+    units.filter((unit) => unit.id === id),
+  );
+  const selectedUnit = selectedUnits[0];
+  const selectedOrgIds = selectedUnits.map((unit) => unit.org_id);
+  const organizationUnits = new Map<string, CalendarUnit>();
+  for (const unit of units) {
+    if (
+      unit.can_create &&
+      (!organizationUnits.has(unit.org_id) || unit.id === unit.org_id)
+    ) {
+      organizationUnits.set(unit.org_id, unit);
+    }
+  }
+  const organizationOptions = [...organizationUnits.values()];
+  function changeUnits(unitIds: string[]) {
+    setValues((current) => ({
+      ...current,
+      unitIds,
+      participantIds: current.unitIds.every((id) => unitIds.includes(id))
+        ? current.participantIds
+        : [],
+    }));
+    setPeopleSearch("");
+    onDirty(true);
+  }
+  function toggleUnit(id: string) {
+    const option = units.find((unit) => unit.id === id);
+    const alreadySelected = selectedUnits.find(
+      (unit) => unit.org_id === option?.org_id,
+    );
+    changeUnits(
+      alreadySelected
+        ? values.unitIds.filter((unitId) => unitId !== alreadySelected.id)
+        : [...values.unitIds, id],
+    );
+  }
+  function toggleAllUnits() {
+    const allSelected = organizationOptions.every((unit) =>
+      selectedOrgIds.includes(unit.org_id),
+    );
+    changeUnits(
+      allSelected
+        ? []
+        : organizationOptions.map(
+            (unit) =>
+              selectedUnits.find((selected) => selected.org_id === unit.org_id)
+                ?.id || unit.id,
+          ),
+    );
+  }
+  const referenceCount = values.links.length + values.attachmentIds.length;
   return (
     <section
       className="notion-event-editor"
@@ -303,8 +471,16 @@ export default function EventDialog({
                     일정 복사
                   </button>
                   {editable && (
-                    <button type="button" onClick={() => setConfirming(true)}>
-                      삭제
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.currentTarget
+                          .closest("details")
+                          ?.removeAttribute("open");
+                        setConfirming(true);
+                      }}
+                    >
+                      일정 삭제
                     </button>
                   )}
                 </div>
@@ -333,10 +509,9 @@ export default function EventDialog({
           disabled={busy || !editable}
           onChange={(e) => change("title", e.target.value)}
         />
-        {draft.event?.recurrence && (
+        {draft.event?.recurrence && editable && (
           <p className="cal-editor-note">
-            반복 일정의 전체 시리즈를 수정·삭제합니다.
-            {draft.occurrenceDay ? ` 선택한 회차: ${draft.occurrenceDay}` : ""}
+            변경 저장은 전체 반복 일정에 적용됩니다.
           </p>
         )}
         {draft.event?.is_masked && (
@@ -344,12 +519,11 @@ export default function EventDialog({
             세부 정보는 작성자·참여자·관리권자에게만 표시됩니다.
           </p>
         )}
-        <fieldset className="cal-editor-section">
-          <legend>날짜와 시간</legend>
-          <div className={`cal-period ${values.allDay ? "is-all-day" : ""}`}>
-            <div className="cal-period-times">
+        <fieldset className="cal-editor-period" aria-label="날짜와 시간">
+          <div className="cal-period">
+            <div className="cal-period-times" hidden={values.allDay}>
               <span className="cal-period-clock" aria-hidden="true">
-                ◷
+                <CalendarIcon name="clock" />
               </span>
               <TimePicker
                 label="시작 시간"
@@ -449,7 +623,7 @@ export default function EventDialog({
               </label>
               {!values.allDay && (
                 <label className="cal-period-zone">
-                  <span aria-hidden="true">◎</span>
+                  <CalendarIcon name="globe" />
                   <select
                     aria-label="시간대"
                     value={values.zone}
@@ -473,201 +647,270 @@ export default function EventDialog({
             </div>
           </div>
         </fieldset>
-        <fieldset disabled={busy || !editable} className="cal-editor-section">
-          <legend>참여자와 장소</legend>
-          {editable ? (
-            <details className="cal-editor-disclosure">
-              <summary>
-                참여자{" "}
-                {values.participantIds.length > 0
-                  ? `· ${values.participantIds.length}명`
-                  : "추가"}
-              </summary>
-              <input
-                aria-label="참여자 검색"
-                placeholder="이름으로 검색"
-                value={peopleSearch}
-                onChange={(e) => setPeopleSearch(e.target.value)}
-              />
-              <div className="cal-option-list">
-                {eventPeople
-                  .filter((p) => p.name.includes(peopleSearch))
-                  .map((p) => (
-                    <label className="calendar-check" key={p.id}>
-                      <input
-                        type="checkbox"
-                        checked={values.participantIds.includes(p.id)}
-                        onChange={() => pick("participantIds", p.id)}
-                      />
-                      {p.name}
-                    </label>
-                  ))}
+        <div className="cal-editor-rows">
+          {(editable || values.participantIds.length > 0) && (
+            <>
+              <div className="cal-editor-icon-row">
+                <CalendarIcon name="person" />
+                <input
+                  ref={peopleRef}
+                  className="cal-editor-inline-row"
+                  aria-label={editable ? "참여자 검색" : "참여자"}
+                  aria-haspopup={editable ? "dialog" : undefined}
+                  aria-expanded={
+                    editable ? popup === "participants" : undefined
+                  }
+                  aria-controls={
+                    popup === "participants" ? peoplePopupId : undefined
+                  }
+                  placeholder={
+                    values.participantIds.length
+                      ? `참여자 · ${values.participantIds.length}명`
+                      : "참여자"
+                  }
+                  value={
+                    editable
+                      ? popup === "participants"
+                        ? peopleSearch
+                        : ""
+                      : draft.event?.participants
+                          .map((p) => p.name)
+                          .join(", ") || ""
+                  }
+                  disabled={busy}
+                  readOnly={!editable}
+                  onClick={() => editable && setPopup("participants")}
+                  onFocus={() => editable && setPopup("participants")}
+                  onChange={(e) => {
+                    setPeopleSearch(e.target.value);
+                    setPopup("participants");
+                  }}
+                  onKeyDown={(e) => {
+                    if (!editable) return;
+                    if (
+                      e.key === "ArrowDown" ||
+                      (e.key === "Enter" && popup === "participants")
+                    ) {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setPopup("participants");
+                      requestAnimationFrame(() =>
+                        peopleChoices.current
+                          ?.querySelector<HTMLInputElement>("input")
+                          ?.focus(),
+                      );
+                    } else if (e.key === "Escape" && popup === "participants") {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      closePopup("participants");
+                    }
+                  }}
+                />
               </div>
-              <small>
-                포털 참여자 지정이며 외부 초대 메일은 발송하지 않습니다.
-              </small>
-            </details>
-          ) : (
-            <p className="cal-readonly-value">
-              {draft.event?.participants.map((p) => p.name).join(", ") ||
-                "참여자 없음"}
-            </p>
+              {editable && popup === "participants" && (
+                <PickerPopover
+                  anchor={peopleRef}
+                  id={peoplePopupId}
+                  className="cal-editor-popup"
+                  label="참여자 선택"
+                  onClose={() => closePopup("participants")}
+                >
+                  <div ref={peopleChoices} className="cal-option-list">
+                    {matchingPeople.map((p) => (
+                      <label className="calendar-check" key={p.id}>
+                        <input
+                          type="checkbox"
+                          disabled={busy}
+                          checked={values.participantIds.includes(p.id)}
+                          onChange={() => pick("participantIds", p.id)}
+                        />
+                        {p.name}
+                      </label>
+                    ))}
+                  </div>
+                  {matchingPeople.length === 0 && (
+                    <p role="status">선택할 참여자가 없습니다.</p>
+                  )}
+                </PickerPopover>
+              )}
+            </>
           )}
-          <label>
-            장소
-            <input
-              maxLength={200}
-              value={values.location}
-              placeholder="위치 추가"
-              onChange={(e) => change("location", e.target.value)}
-            />
-          </label>
-        </fieldset>
-        <fieldset disabled={busy || !editable} className="cal-editor-section">
-          <legend>링크 및 첨부 자료</legend>
-          {values.links.map((link, index) => (
-            <div className="cal-link-row" key={index}>
+          {(editable || values.location.trim()) && (
+            <div className="cal-editor-icon-row">
+              <CalendarIcon name="location" />
               <input
-                aria-label={`링크 ${index + 1} 이름`}
-                placeholder="이름"
-                maxLength={120}
-                value={link.title}
-                onChange={(e) =>
-                  change(
-                    "links",
-                    values.links.map((l, i) =>
-                      i === index ? { ...l, title: e.target.value } : l,
-                    ),
-                  )
-                }
+                className="cal-editor-inline-row"
+                aria-label="장소"
+                maxLength={200}
+                value={values.location}
+                placeholder="장소"
+                disabled={busy}
+                readOnly={!editable}
+                onChange={(e) => change("location", e.target.value)}
               />
-              <input
-                type="url"
-                aria-label={`링크 ${index + 1} 주소`}
-                placeholder="https://"
-                maxLength={2000}
-                value={link.url}
-                onChange={(e) =>
-                  change(
-                    "links",
-                    values.links.map((l, i) =>
-                      i === index ? { ...l, url: e.target.value } : l,
-                    ),
-                  )
-                }
-              />
-              <button
-                type="button"
-                aria-label={`링크 ${index + 1} 제거`}
-                onClick={() =>
-                  change(
-                    "links",
-                    values.links.filter((_, i) => i !== index),
-                  )
-                }
-              >
-                ✕
-              </button>
             </div>
-          ))}
-          {editable && (
-            <button
-              type="button"
-              className="cal-inline-action"
-              disabled={values.links.length >= 10}
-              onClick={() =>
-                change("links", [...values.links, { title: "", url: "" }])
-              }
-            >
-              ＋ 링크 추가
-            </button>
           )}
-          {editable && (
-            <details className="cal-editor-disclosure">
-              <summary>
-                자료실에서 첨부 · {values.attachmentIds.length}개
-              </summary>
-              <input
-                aria-label="첨부 자료 검색"
-                placeholder="자료 제목 검색"
-                value={docSearch}
-                onChange={(e) => setDocSearch(e.target.value)}
-              />
-              <div className="cal-option-list">
-                {documents
-                  .filter((d) => d.title.includes(docSearch))
-                  .slice(0, 50)
-                  .map((d) => (
-                    <label className="calendar-check" key={d.id}>
+          {(editable || referenceCount > 0) && (
+            <EditorPopoverRow
+              label="링크 및 첨부 자료"
+              icon="link"
+              detail={referenceCount ? `${referenceCount}개` : undefined}
+              open={popup === "links"}
+              onToggle={() => togglePopup("links")}
+              onClose={() => closePopup("links")}
+            >
+              <fieldset className="cal-editor-popup-content" disabled={busy}>
+                {editable &&
+                  values.links.map((link, index) => (
+                    <div className="cal-link-row" key={index}>
                       <input
-                        type="checkbox"
-                        checked={values.attachmentIds.includes(d.id)}
-                        onChange={() => pick("attachmentIds", d.id)}
+                        aria-label={`링크 ${index + 1} 이름`}
+                        placeholder="이름"
+                        maxLength={120}
+                        value={link.title}
+                        onChange={(e) =>
+                          change(
+                            "links",
+                            values.links.map((l, i) =>
+                              i === index ? { ...l, title: e.target.value } : l,
+                            ),
+                          )
+                        }
                       />
-                      {d.title}
-                    </label>
+                      <input
+                        id={`${linkInputId}-${index}`}
+                        inputMode="url"
+                        aria-label={`링크 ${index + 1} 주소`}
+                        placeholder="https://"
+                        maxLength={2000}
+                        value={link.url}
+                        onChange={(e) =>
+                          change(
+                            "links",
+                            values.links.map((l, i) =>
+                              i === index ? { ...l, url: e.target.value } : l,
+                            ),
+                          )
+                        }
+                      />
+                      <button
+                        type="button"
+                        aria-label={`링크 ${index + 1} 제거`}
+                        onClick={() =>
+                          change(
+                            "links",
+                            values.links.filter((_, i) => i !== index),
+                          )
+                        }
+                      >
+                        ✕
+                      </button>
+                    </div>
                   ))}
-              </div>
-              <small>
-                자료실 문서를 연결합니다. 원본 자료의 열람 권한은 유지됩니다.
-              </small>
-            </details>
+                {editable && (
+                  <button
+                    type="button"
+                    className="cal-inline-action"
+                    disabled={values.links.length >= 10}
+                    onClick={() =>
+                      change("links", [...values.links, { title: "", url: "" }])
+                    }
+                  >
+                    ＋ 링크 추가
+                  </button>
+                )}
+                {editable && (
+                  <>
+                    <label>
+                      자료실에서 첨부
+                      <input
+                        aria-label="첨부 자료 검색"
+                        placeholder="자료 제목 검색"
+                        value={docSearch}
+                        onChange={(e) => setDocSearch(e.target.value)}
+                      />
+                    </label>
+                    <div className="cal-option-list">
+                      {documents
+                        .filter((d) => d.title.includes(docSearch))
+                        .slice(0, 50)
+                        .map((d) => (
+                          <label className="calendar-check" key={d.id}>
+                            <input
+                              type="checkbox"
+                              checked={values.attachmentIds.includes(d.id)}
+                              onChange={() => pick("attachmentIds", d.id)}
+                            />
+                            {d.title}
+                          </label>
+                        ))}
+                    </div>
+                    <small>
+                      자료실 문서를 연결합니다. 원본 자료의 열람 권한은
+                      유지됩니다.
+                    </small>
+                  </>
+                )}
+                {draft.event?.links.length ||
+                draft.event?.attachments.length ? (
+                  <div className="cal-editor-links">
+                    {draft.event.links.map((l, i) => (
+                      <a
+                        key={i}
+                        href={l.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        ↗ {l.title}
+                      </a>
+                    ))}
+                    {draft.event.attachments.map((d) => (
+                      <a
+                        key={d.id}
+                        href={`/api/documents/${d.id}/versions/${d.version}/download`}
+                      >
+                        ▤ {d.title} · v{d.version}
+                      </a>
+                    ))}
+                  </div>
+                ) : null}
+              </fieldset>
+            </EditorPopoverRow>
           )}
-        </fieldset>
-        {draft.event?.links.length || draft.event?.attachments.length ? (
-          <div className="cal-editor-links">
-            {draft.event.links.map((l, i) => (
-              <a key={i} href={l.url} target="_blank" rel="noopener noreferrer">
-                ↗ {l.title}
-              </a>
-            ))}
-            {draft.event.attachments.map((d) => (
-              <a
-                key={d.id}
-                href={`/api/documents/${d.id}/versions/${d.version}/download`}
-              >
-                ▤ {d.title} · v{d.version}
-              </a>
-            ))}
-          </div>
-        ) : null}
-        <label>
-          설명
-          <textarea
-            maxLength={2000}
-            value={values.description}
-            placeholder="설명 추가"
+          {(editable || values.description.trim()) && (
+            <div className="cal-editor-icon-row">
+              <CalendarIcon name="description" />
+              <textarea
+                className="cal-editor-inline-row cal-editor-inline-description"
+                aria-label="설명"
+                rows={1}
+                maxLength={2000}
+                value={values.description}
+                placeholder="설명"
+                disabled={busy}
+                readOnly={!editable}
+                onChange={(e) => change("description", e.target.value)}
+              />
+            </div>
+          )}
+          <fieldset
+            className="cal-editor-calendar"
+            aria-label="캘린더 및 표시"
             disabled={busy || !editable}
-            onChange={(e) => change("description", e.target.value)}
-          />
-        </label>
-        <fieldset className="cal-editor-section" disabled={busy || !editable}>
-          <legend>캘린더 및 표시</legend>
-          <label>
-            캘린더 · 공개 범위
-            <select
-              aria-label="캘린더 · 공개 범위"
-              required
-              value={values.unit}
-              disabled={Boolean(draft.event)}
-              onChange={(e) => {
-                change("unit", e.target.value);
-                change("participantIds", []);
-              }}
-            >
-              <option value="">캘린더 선택</option>
-              {units
-                .filter((u) => u.can_create || u.id === draft.event?.unit_id)
-                .map((u) => (
-                  <option key={u.id} value={u.id}>
-                    {u.name}
-                  </option>
-                ))}
-            </select>
-          </label>
-          <div className="calendar-date-inputs">
-            <label>
-              상태
+          >
+            <ColorPicker
+              value={values.color}
+              orgId={selectedUnit?.org_id || draft.event?.org_id || ""}
+              orgName={selectedUnit?.org_name || draft.event?.org_name || ""}
+              selectedOrgIds={selectedOrgIds}
+              organizationColors={organizationColors}
+              units={organizationOptions}
+              onUnitToggle={draft.event ? undefined : toggleUnit}
+              onAllToggle={draft.event ? undefined : toggleAllUnits}
+              disabled={busy || !editable}
+              onChange={(color) => change("color", color)}
+            />
+            <div className="calendar-date-inputs">
               <select
                 aria-label="상태"
                 value={values.availability}
@@ -678,9 +921,6 @@ export default function EventDialog({
                 <option value="busy">바쁨</option>
                 <option value="free">한가함</option>
               </select>
-            </label>
-            <label>
-              정보 표시 여부
               <select
                 aria-label="정보 표시 여부"
                 value={values.visibility}
@@ -691,76 +931,88 @@ export default function EventDialog({
                 <option value="details">일정 상세 공개</option>
                 <option value="busy">시간만 공개</option>
               </select>
-            </label>
-          </div>
-          <small>
-            시간만 공개하면 상세는 작성자·참여자·관리권자만 볼 수 있습니다.
-          </small>
-          <ColorPicker
-            value={values.color}
-            orgId={units.find((u) => u.id === values.unit)?.org_id || ""}
-            orgName={units.find((u) => u.id === values.unit)?.org_name || ""}
-            disabled={busy || !editable}
-            onChange={(color) => change("color", color)}
-          />
-        </fieldset>
-        <fieldset className="cal-editor-section" disabled={busy || !editable}>
-          <legend>리마인더</legend>
-          {values.reminders.map((minutes, index) => (
-            <div className="cal-reminder-row" key={index}>
-              <select
-                aria-label={`리마인더 ${index + 1}`}
-                value={minutes}
-                onChange={(e) =>
-                  change(
-                    "reminders",
-                    values.reminders.map((m, i) =>
-                      i === index ? Number(e.target.value) : m,
-                    ),
-                  )
-                }
-              >
-                {[0, 5, 10, 15, 30, 60, 1440, 10080].map((m) => (
-                  <option key={m} value={m}>
-                    {m === 0
-                      ? "시작할 때"
-                      : m >= 1440
-                        ? `${m / 1440}일 전`
-                        : `${m}분 전`}
-                  </option>
-                ))}
-              </select>
-              <button
-                type="button"
-                aria-label={`리마인더 ${index + 1} 제거`}
-                onClick={() =>
-                  change(
-                    "reminders",
-                    values.reminders.filter((_, i) => i !== index),
-                  )
-                }
-              >
-                ✕
-              </button>
             </div>
-          ))}
-          {editable && (
-            <button
-              className="cal-inline-action"
-              type="button"
-              disabled={values.reminders.length >= 3}
-              onClick={() =>
-                change("reminders", [
-                  ...values.reminders,
-                  [30, 10, 5].find((m) => !values.reminders.includes(m)) || 0,
-                ])
+            {values.visibility === "busy" && !draft.event?.is_masked && (
+              <small>상세는 작성자·참여자·관리권자만 볼 수 있습니다.</small>
+            )}
+          </fieldset>
+          {(editable || values.reminders.length > 0) && (
+            <EditorPopoverRow
+              label="리마인더"
+              icon="bell"
+              detail={
+                values.reminders.length
+                  ? `${values.reminders.length}개`
+                  : undefined
               }
+              open={popup === "reminders"}
+              onToggle={() => togglePopup("reminders")}
+              onClose={() => closePopup("reminders")}
             >
-              ＋ 리마인더 추가
-            </button>
+              <fieldset
+                className="cal-editor-popup-content"
+                disabled={busy || !editable}
+              >
+                {values.reminders.map((minutes, index) => (
+                  <div className="cal-reminder-row" key={index}>
+                    <select
+                      aria-label={`리마인더 ${index + 1}`}
+                      value={minutes}
+                      onChange={(e) =>
+                        change(
+                          "reminders",
+                          values.reminders.map((m, i) =>
+                            i === index ? Number(e.target.value) : m,
+                          ),
+                        )
+                      }
+                    >
+                      {[0, 5, 10, 15, 30, 60, 1440, 10080].map((m) => (
+                        <option key={m} value={m}>
+                          {m === 0
+                            ? "시작할 때"
+                            : m >= 1440
+                              ? `${m / 1440}일 전`
+                              : `${m}분 전`}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      aria-label={`리마인더 ${index + 1} 제거`}
+                      onClick={() =>
+                        change(
+                          "reminders",
+                          values.reminders.filter((_, i) => i !== index),
+                        )
+                      }
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+                {editable && (
+                  <button
+                    className="cal-inline-action"
+                    type="button"
+                    disabled={values.reminders.length >= 3}
+                    onClick={() =>
+                      change("reminders", [
+                        ...values.reminders,
+                        [30, 10, 5].find(
+                          (m) => !values.reminders.includes(m),
+                        ) || 0,
+                      ])
+                    }
+                  >
+                    ＋ 리마인더 추가
+                  </button>
+                )}
+                <small>포털이 열려 있을 때 작성자·참여자에게 표시됩니다.</small>
+              </fieldset>
+            </EditorPopoverRow>
           )}
-          <small>포털이 열려 있을 때 작성자·참여자에게 표시됩니다.</small>
-        </fieldset>
+        </div>
         {error && (
           <p className="error" role="alert">
             {error}
@@ -795,16 +1047,6 @@ export default function EventDialog({
           </div>
         )}
         <div className="calendar-dialog-actions">
-          {draft.event && editable && !confirming && (
-            <button
-              type="button"
-              className="calendar-remove"
-              disabled={busy}
-              onClick={() => setConfirming(true)}
-            >
-              일정 삭제
-            </button>
-          )}
           <span />
           <button type="button" disabled={busy} onClick={onClose}>
             {editable ? "취소" : "닫기"}
@@ -813,7 +1055,7 @@ export default function EventDialog({
             <button
               type="submit"
               className="primary"
-              disabled={busy || !values.unit || confirming}
+              disabled={busy || !values.unitIds.length || confirming}
             >
               {busy ? "저장 중…" : draft.event ? "변경 저장" : "일정 추가"}
             </button>
