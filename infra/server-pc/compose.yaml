@@ -1,0 +1,84 @@
+name: yeonieum-preview
+
+services:
+  postgres:
+    image: postgres:17.12-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: yeonieum
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_admin_password
+      POSTGRES_INITDB_ARGS: --encoding=UTF8 --locale=C
+    secrets:
+      - postgres_admin_password
+      - postgres_app_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - type: bind
+        source: ./init-postgres.sh
+        target: /docker-entrypoint-initdb.d/01-yeonieum.sh
+        read_only: true
+        bind:
+          create_host_path: false
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "postgres", "-d", "yeonieum"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  api:
+    build: ../../apps/api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      YEONIEUM_MODE: local-demo
+      YEONIEUM_DATABASE_URL: postgresql://yeonieum@postgres:5432/yeonieum
+      YEONIEUM_POSTGRES_PASSWORD_FILE: /run/secrets/postgres_app_password
+      YEONIEUM_STORAGE_ROOT: /var/lib/yeonieum
+      YEONIEUM_WEB_PORT: "8173"
+      YEONIEUM_EXTERNAL_SYNC: "${YEONIEUM_EXTERNAL_SYNC:-1}"
+    secrets:
+      - postgres_app_password
+    volumes:
+      - preview_data:/var/lib/yeonieum
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "from urllib.request import urlopen; urlopen('http://127.0.0.1:8180/api/health', timeout=3).close()"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  preview:
+    build: ../../apps/web
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      YEONIEUM_PREVIEW_BIND: 0.0.0.0
+      YEONIEUM_API_HOST: api
+      YEONIEUM_WEB_ROOT: /srv
+    ports:
+      - "127.0.0.1:8173:8173"
+    volumes:
+      - type: bind
+        source: ./Caddyfile.preview
+        target: /etc/caddy/Caddyfile
+        read_only: true
+        bind:
+          create_host_path: false
+
+volumes:
+  postgres_data:
+  preview_data:
+
+secrets:
+  postgres_admin_password:
+    file: ./.env.postgres-admin-password
+  postgres_app_password:
+    file: ./.env.postgres-app-password

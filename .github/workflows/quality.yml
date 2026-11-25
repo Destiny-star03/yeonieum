@@ -46,6 +46,19 @@ jobs:
   api-tests:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17.12-alpine
+        env:
+          POSTGRES_DB: yeonieum_test
+          POSTGRES_USER: yeonieum_test
+          POSTGRES_PASSWORD: ci-test-only
+          POSTGRES_INITDB_ARGS: --encoding=UTF8 --locale=C
+        ports:
+          - 5432/tcp
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U yeonieum_test -d yeonieum_test"
+          --health-interval 5s --health-timeout 3s --health-retries 15
     steps:
       - uses: actions/checkout@v6
         with:
@@ -59,6 +72,8 @@ jobs:
       - run: python -m ruff check apps/api
       - run: python -m ruff format --check apps/api
       - run: python -m pytest apps/api -q
+        env:
+          YEONIEUM_TEST_POSTGRES_URL: postgresql://yeonieum_test:ci-test-only@127.0.0.1:${{ job.services.postgres.ports[5432] }}/yeonieum_test
   web-checks:
     runs-on: ubuntu-latest
     timeout-minutes: 15

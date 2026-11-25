@@ -1,0 +1,46 @@
+name: yeonieum-public
+
+services:
+  edge:
+    image: caddy:2.11.9-alpine
+    restart: unless-stopped
+    environment:
+      YEONIEUM_PUBLIC_HOST: "${YEONIEUM_PUBLIC_HOST:?Set the registered Duck DNS hostname}"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - type: bind
+        source: ./Caddyfile
+        target: /etc/caddy/Caddyfile
+        read_only: true
+        bind:
+          create_host_path: false
+      - caddy_data:/data
+      - caddy_config:/config
+
+  duckdns:
+    image: python:3.11-slim-trixie
+    profiles: [ddns]
+    restart: unless-stopped
+    read_only: true
+    environment:
+      YEONIEUM_PUBLIC_HOST: "${YEONIEUM_PUBLIC_HOST:?Set the registered Duck DNS hostname}"
+    command: ["python", "-u", "/opt/yeonieum/update-duckdns.py"]
+    secrets:
+      - duckdns_token
+    volumes:
+      - type: bind
+        source: ./update-duckdns.py
+        target: /opt/yeonieum/update-duckdns.py
+        read_only: true
+        bind:
+          create_host_path: false
+
+secrets:
+  duckdns_token:
+    file: ./.env.duckdns-token
+
+volumes:
+  caddy_data:
+  caddy_config:

@@ -1,0 +1,11 @@
+{
+	skip_install_trust
+	http_port {$YEONIEUM_PUBLIC_HTTP_PORT:80}
+	default_bind {$YEONIEUM_PUBLIC_BIND:0.0.0.0}
+}
+
+{$YEONIEUM_PUBLIC_HOST} {
+	header Cache-Control "no-store"
+	respond /healthz "ok" 200
+	respond "연이음 공개 접속을 준비 중입니다." 503
+}
